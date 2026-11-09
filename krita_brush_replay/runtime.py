@@ -26,6 +26,7 @@ class BrushReplayRuntime:
         panel.record_requested.connect(self._service.start_recording)
         panel.stop_requested.connect(self._service.stop_recording)
         panel.replay_requested.connect(self._service.replay)
+        panel.replay_current_requested.connect(self._service.replay_with_current_settings)
         panel.destroyed.connect(self.close)
         self._service.subscribe(self._apply_state)
 

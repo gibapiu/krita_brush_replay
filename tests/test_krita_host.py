@@ -1,12 +1,29 @@
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
+    ColorState,
     ContextRef,
     RecordingSession,
+    ResourceRef,
     Stroke,
 )
 from krita_brush_replay.infrastructure.krita_host import KritaHost
 
 CONTEXT = ContextRef("document", "layer")
+
+
+def brush_state(size: float = 10.0) -> BrushState:
+    return BrushState(
+        preset=ResourceRef("preset", f"Brush {size}", f"brush-{size}.kpp"),
+        foreground=ColorState("RGBA", "U8", "sRGB", (0.0, 0.0, 0.0, 1.0)),
+        background=ColorState("RGBA", "U8", "sRGB", (1.0, 1.0, 1.0, 1.0)),
+        size=size,
+        opacity=1.0,
+        flow=1.0,
+        rotation=0.0,
+        pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+        blending_mode="normal",
+    )
 
 
 class FakeNode:
@@ -108,21 +125,144 @@ class FakeReplayer:
     def __init__(self) -> None:
         self.calls = []
 
-    def replay(self, *args) -> None:
-        self.calls.append(args)
+    def replay(self, *args, **kwargs) -> None:
+        self.calls.append((args, kwargs))
+        args[4]()
+
+
+class FailingReplayer:
+    def replay(self, *args, **kwargs) -> None:
+        kwargs["apply_brush_state"](args[2].strokes[0].brush_state)
+        args[5](RuntimeError("paint failed"))
+
+
+class FakeBrushSettings:
+    def __init__(self) -> None:
+        self.current = brush_state(99.0)
+        self.capture_calls = 0
+        self.prepared = []
+        self.applied = []
+
+    def capture(self, view) -> BrushState:
+        self.capture_calls += 1
+        return self.current
+
+    def prepare_replay(self, view, states):
+        self.prepared = list(states)
+
+        def apply(state: BrushState) -> None:
+            self.applied.append(state)
+            self.current = state
+
+        return apply
+
+
+class MissingResourceBrushSettings(FakeBrushSettings):
+    def prepare_replay(self, view, states):
+        raise RuntimeError("recorded preset resource is unavailable: Missing")
 
 
 def test_replay_passes_the_explicit_target_to_the_replayer() -> None:
     document = FakeDocument(FakeNode())
     host = KritaHost(FakeKrita(document))
     replayer = FakeReplayer()
+    settings = FakeBrushSettings()
+    host._replayer = replayer
+    host._brush_settings = settings
+    session = RecordingSession(
+        CONTEXT,
+        (Stroke((BrushSample(1.0, 2.0, 0.5, 0),), brush_state()),),
+    )
+
+    host.replay(
+        session,
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        use_original_settings=True,
+    )
+
+    assert len(replayer.calls) == 1
+    args, kwargs = replayer.calls[0]
+    assert args[0:4] == (document, document.node, session, CONTEXT)
+    assert callable(kwargs["apply_brush_state"])
+    assert settings.applied == [brush_state(99.0)]
+
+
+def test_replay_restores_pre_replay_settings_after_failure() -> None:
+    document = FakeDocument(FakeNode())
+    host = KritaHost(FakeKrita(document))
+    settings = FakeBrushSettings()
+    saved_state = settings.current
+    host._brush_settings = settings
+    host._replayer = FailingReplayer()
+    recorded_state = brush_state(20.0)
+    session = RecordingSession(
+        CONTEXT,
+        (Stroke((BrushSample(1.0, 2.0, 0.5, 0),), recorded_state),),
+    )
+    errors = []
+
+    host.replay(
+        session,
+        CONTEXT,
+        lambda: None,
+        errors.append,
+        use_original_settings=True,
+    )
+
+    assert settings.applied == [recorded_state, saved_state]
+    assert settings.current == saved_state
+    assert len(errors) == 1
+    assert "paint failed" in str(errors[0])
+
+
+def test_original_settings_replay_resolves_resources_before_painting() -> None:
+    document = FakeDocument(FakeNode())
+    host = KritaHost(FakeKrita(document))
+    replayer = FakeReplayer()
+    host._brush_settings = MissingResourceBrushSettings()
     host._replayer = replayer
     session = RecordingSession(
         CONTEXT,
-        (Stroke((BrushSample(1.0, 2.0, 0.5, 0),)),),
+        (Stroke((BrushSample(1.0, 2.0, 0.5, 0),), brush_state()),),
+    )
+    errors = []
+
+    host.replay(
+        session,
+        CONTEXT,
+        lambda: None,
+        errors.append,
+        use_original_settings=True,
     )
 
-    host.replay(session, CONTEXT, lambda: None, lambda error: None)
+    assert replayer.calls == []
+    assert len(errors) == 1
+    assert "unavailable" in str(errors[0])
 
-    assert len(replayer.calls) == 1
-    assert replayer.calls[0][0:4] == (document, document.node, session, CONTEXT)
+
+def test_current_settings_replay_does_not_capture_apply_or_restore_settings() -> None:
+    document = FakeDocument(FakeNode())
+    host = KritaHost(FakeKrita(document))
+    replayer = FakeReplayer()
+    settings = FakeBrushSettings()
+    host._brush_settings = settings
+    host._replayer = replayer
+    session = RecordingSession(
+        CONTEXT,
+        (Stroke((BrushSample(1.0, 2.0, 0.5, 0),), brush_state()),),
+    )
+
+    host.replay(
+        session,
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        use_original_settings=False,
+    )
+
+    assert settings.capture_calls == 0
+    assert settings.prepared == []
+    assert settings.applied == []
+    assert replayer.calls[0][1].get("apply_brush_state") is None

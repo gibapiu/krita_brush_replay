@@ -3,13 +3,30 @@ from collections.abc import Callable
 from krita_brush_replay.app.service import BrushReplayService, ServiceMode
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
+    ColorState,
     ContextRef,
     InputPhase,
     RecordingSession,
+    ResourceRef,
 )
 
 CONTEXT = ContextRef(document_id="document", layer_id="layer")
 OTHER_LAYER = ContextRef(document_id="document", layer_id="other-layer")
+
+
+def brush_state(size: float = 10.0) -> BrushState:
+    return BrushState(
+        preset=ResourceRef("preset", f"Brush {size}", f"brush-{size}.kpp"),
+        foreground=ColorState("RGBA", "U8", "sRGB", (0.0, 0.0, 0.0, 1.0)),
+        background=ColorState("RGBA", "U8", "sRGB", (1.0, 1.0, 1.0, 1.0)),
+        size=size,
+        opacity=1.0,
+        flow=1.0,
+        rotation=0.0,
+        pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+        blending_mode="normal",
+    )
 
 
 class FakeHost:
@@ -17,6 +34,9 @@ class FakeHost:
         self.context: ContextRef | None = CONTEXT
         self.context_calls = 0
         self.replayed: list[tuple[RecordingSession, ContextRef]] = []
+        self.brush_state = brush_state()
+        self.brush_state_captures = 0
+        self.replay_original_settings: list[bool] = []
         self.complete_replay_immediately = True
         self._on_complete: Callable[[], None] | None = None
         self._on_error: Callable[[Exception], None] | None = None
@@ -25,14 +45,21 @@ class FakeHost:
         self.context_calls += 1
         return self.context
 
+    def capture_brush_state(self) -> BrushState:
+        self.brush_state_captures += 1
+        return self.brush_state
+
     def replay(
         self,
         session: RecordingSession,
         target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        *,
+        use_original_settings: bool,
     ) -> None:
         self.replayed.append((session, target))
+        self.replay_original_settings.append(use_original_settings)
         self._on_complete = on_complete
         self._on_error = on_error
         if self.complete_replay_immediately:
@@ -60,6 +87,22 @@ def test_service_records_complete_stroke() -> None:
     assert service.state.stroke_count == 1
     assert service.session is not None
     assert [point.x for point in service.session.strokes[0].samples] == [1.0, 2.0]
+    assert service.session.strokes[0].brush_state == brush_state()
+
+
+def test_each_stroke_keeps_the_settings_captured_when_it_started() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    service.start_recording()
+    service.accept_input(InputPhase.PRESS, sample(1.0))
+    service.accept_input(InputPhase.RELEASE, None)
+    host.brush_state = brush_state(25.0)
+    service.accept_input(InputPhase.PRESS, sample(2.0))
+    service.accept_input(InputPhase.RELEASE, None)
+    service.stop_recording()
+
+    assert service.session is not None
+    assert [stroke.brush_state.size for stroke in service.session.strokes] == [10.0, 25.0]
 
 
 def test_start_recording_replaces_previous_session() -> None:
@@ -99,6 +142,7 @@ def test_move_samples_do_not_query_krita_context() -> None:
     service.accept_input(InputPhase.MOVE, sample(3.0))
 
     assert host.context_calls == calls_after_press
+    assert host.brush_state_captures == 1
 
 
 def test_move_samples_do_not_notify_the_ui() -> None:
@@ -160,8 +204,19 @@ def test_replay_uses_origin_as_the_initial_target() -> None:
 
     assert service.session is not None
     assert host.replayed == [(service.session, service.session.origin)]
+    assert host.replay_original_settings == [True]
     assert service.state.mode is ServiceMode.IDLE
     assert "complete" in service.state.message.lower()
+
+
+def test_current_settings_replay_is_an_explicit_comparison_mode() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    record_one_stroke(service)
+
+    service.replay_with_current_settings()
+
+    assert host.replay_original_settings == [False]
 
 
 def test_replay_rejects_a_different_active_layer() -> None:

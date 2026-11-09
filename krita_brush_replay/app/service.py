@@ -9,6 +9,7 @@ from typing import Protocol
 
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
     ContextRef,
     InputPhase,
     RecordingSession,
@@ -19,12 +20,16 @@ from krita_brush_replay.domain.recording import (
 class ReplayHost(Protocol):
     def active_context(self) -> ContextRef | None: ...
 
+    def capture_brush_state(self) -> BrushState: ...
+
     def replay(
         self,
         session: RecordingSession,
         target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        *,
+        use_original_settings: bool,
     ) -> None: ...
 
 
@@ -66,6 +71,7 @@ class BrushReplayService:
         self._context: ContextRef | None = None
         self._strokes: list[Stroke] = []
         self._active_samples: list[BrushSample] | None = None
+        self._active_brush_state: BrushState | None = None
         self._message = "Ready. Record strokes on one paint layer."
         self._listeners: list[StateListener] = []
 
@@ -145,6 +151,7 @@ class BrushReplayService:
 
         if phase is InputPhase.PRESS:
             self._finish_active_stroke()
+            self._active_brush_state = self._host.capture_brush_state()
             self._active_samples = [sample]
             self._notify()
         elif self._active_samples is not None:
@@ -170,6 +177,12 @@ class BrushReplayService:
         self._notify()
 
     def replay(self) -> None:
+        self._replay(use_original_settings=True)
+
+    def replay_with_current_settings(self) -> None:
+        self._replay(use_original_settings=False)
+
+    def _replay(self, *, use_original_settings: bool) -> None:
         if self._mode is not ServiceMode.IDLE:
             return
         session = self.session
@@ -182,24 +195,29 @@ class BrushReplayService:
                 )
                 return
             self._mode = ServiceMode.REPLAYING
-            self._message = "Replaying with the current brush settings…"
+            settings_name = "recorded" if use_original_settings else "current"
+            self._message = f"Replaying with {settings_name} brush settings…"
             self._notify()
             self._host.replay(
                 session,
                 session.origin,
                 self._replay_completed,
                 self._replay_failed,
+                use_original_settings=use_original_settings,
             )
         except Exception as error:
             self._replay_failed(error)
 
     def _finish_active_stroke(self) -> None:
-        if self._active_samples:
-            self._strokes.append(Stroke(tuple(self._active_samples)))
+        if self._active_samples and self._active_brush_state is not None:
+            self._strokes.append(
+                Stroke(tuple(self._active_samples), self._active_brush_state)
+            )
         self._discard_active_stroke()
 
     def _discard_active_stroke(self) -> None:
         self._active_samples = None
+        self._active_brush_state = None
 
     def _stop_for_context_change(self) -> None:
         self._discard_active_stroke()
@@ -209,7 +227,7 @@ class BrushReplayService:
 
     def _replay_completed(self) -> None:
         self._mode = ServiceMode.IDLE
-        self._message = "Replay complete. Current brush settings were used."
+        self._message = "Replay complete. Your pre-replay brush settings were restored."
         self._notify()
 
     def _replay_failed(self, error: Exception) -> None:
