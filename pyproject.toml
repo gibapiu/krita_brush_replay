@@ -1,7 +1,7 @@
 [project]
 name = "krita-brush-replay"
 version = "0.1.0"
-description = "Record Krita brush strokes and replay their input with current settings"
+description = "Record Krita brush strokes and replay their input and settings"
 requires-python = ">=3.10"
 
 [tool.pytest.ini_options]

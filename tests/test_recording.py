@@ -2,9 +2,24 @@ import pytest
 
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
+    ColorState,
     ContextRef,
+    ResourceRef,
     Stroke,
     normalized_input_speed,
+)
+
+BRUSH_STATE = BrushState(
+    preset=ResourceRef("preset", "Basic", "basic.kpp"),
+    foreground=ColorState("RGBA", "U8", "sRGB", (0.0, 0.0, 0.0, 1.0)),
+    background=ColorState("RGBA", "U8", "sRGB", (1.0, 1.0, 1.0, 1.0)),
+    size=10.0,
+    opacity=1.0,
+    flow=1.0,
+    rotation=0.0,
+    pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+    blending_mode="normal",
 )
 
 
@@ -15,7 +30,7 @@ def test_brush_sample_rejects_pressure_outside_unit_interval() -> None:
 
 def test_stroke_requires_at_least_one_sample() -> None:
     with pytest.raises(ValueError, match="sample"):
-        Stroke(samples=())
+        Stroke(samples=(), brush_state=BRUSH_STATE)
 
 
 def test_context_requires_document_and_layer_ids() -> None:
