@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from krita_brush_replay.domain.recording import (
+    BrushState,
     ContextRef,
     RecordingSession,
 )
+from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
 from krita_brush_replay.infrastructure.krita_replay import KritaReplayer
 from krita_brush_replay.infrastructure.qt_facade import QtCore
 
@@ -17,6 +19,7 @@ class KritaHost:
 
     def __init__(self, krita_instance=None) -> None:
         self._krita = krita_instance if krita_instance is not None else _krita_instance()
+        self._brush_settings = KritaBrushStateAdapter(self._krita)
         self._replayer = KritaReplayer(self.active_context)
 
     def active_context(self) -> ContextRef | None:
@@ -75,26 +78,89 @@ class KritaHost:
 
         return to_image
 
+    def capture_brush_state(self) -> BrushState:
+        view = self._active_view()
+        if view is None:
+            raise RuntimeError("no active Krita view")
+        return self._brush_settings.capture(view)
+
     def replay(
         self,
         session: RecordingSession,
         target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        *,
+        use_original_settings: bool,
     ) -> None:
         document = self._active_document()
         if document is None or self.active_context() != target:
             on_error(RuntimeError("the active document or layer changed"))
             return
         node = _call(document, "activeNode")
-        self._replayer.replay(
-            document,
-            node,
-            session,
-            target,
-            on_complete,
-            on_error,
-        )
+        if not use_original_settings:
+            try:
+                self._replayer.replay(
+                    document,
+                    node,
+                    session,
+                    target,
+                    on_complete,
+                    on_error,
+                )
+            except Exception as error:
+                on_error(error)
+            return
+
+        view = self._active_view()
+        if view is None:
+            on_error(RuntimeError("no active Krita view"))
+            return
+        try:
+            saved_state = self._brush_settings.capture(view)
+            apply_state = self._brush_settings.prepare_replay(
+                view,
+                (saved_state, *(stroke.brush_state for stroke in session.strokes)),
+            )
+        except Exception as error:
+            on_error(error)
+            return
+
+        finished = False
+
+        def finish(error: Exception | None = None) -> None:
+            nonlocal finished
+            if finished:
+                return
+            finished = True
+            try:
+                apply_state(saved_state)
+            except Exception as restore_error:
+                if error is None:
+                    error = RuntimeError(
+                        f"replay finished but brush settings could not be restored: {restore_error}"
+                    )
+                else:
+                    error = RuntimeError(
+                        f"{error}; brush settings could not be restored: {restore_error}"
+                    )
+            if error is None:
+                on_complete()
+            else:
+                on_error(error)
+
+        try:
+            self._replayer.replay(
+                document,
+                node,
+                session,
+                target,
+                lambda: finish(),
+                finish,
+                apply_brush_state=apply_state,
+            )
+        except Exception as error:
+            finish(error)
 
     def _active_document(self):
         return _call(self._krita, "activeDocument")
