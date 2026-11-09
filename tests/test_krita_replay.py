@@ -310,6 +310,36 @@ def test_continuous_api_receives_all_recorded_input_axes() -> None:
     assert second.speed == 0.6
 
 
+def test_continuous_replay_applies_settings_before_each_stroke() -> None:
+    node = ContinuousNode()
+    second_state = replace(BRUSH_STATE, size=25.0)
+    session = RecordingSession(
+        CONTEXT,
+        (
+            Stroke((BrushSample(1.0, 1.0, 0.5, 0),), BRUSH_STATE),
+            Stroke((BrushSample(2.0, 2.0, 0.5, 10),), second_state),
+        ),
+    )
+    applied = []
+
+    replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=ImmediateScheduler(),
+    ).replay(
+        FakeDocument(),
+        node,
+        session,
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        apply_brush_state=applied.append,
+    )
+
+    assert applied == [BRUSH_STATE, second_state]
+    assert len(node.polyline_strokes) == 2
+
+
 def test_replay_paints_pressure_aware_segments_in_batches() -> None:
     node = FakeNode()
     document = FakeDocument()

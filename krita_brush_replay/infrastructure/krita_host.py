@@ -98,12 +98,30 @@ class KritaHost:
             on_error(RuntimeError("the active document or layer changed"))
             return
         node = _call(document, "activeNode")
+        if not use_original_settings:
+            try:
+                self._replayer.replay(
+                    document,
+                    node,
+                    session,
+                    target,
+                    on_complete,
+                    on_error,
+                )
+            except Exception as error:
+                on_error(error)
+            return
+
         view = self._active_view()
         if view is None:
             on_error(RuntimeError("no active Krita view"))
             return
         try:
             saved_state = self._brush_settings.capture(view)
+            apply_state = self._brush_settings.prepare_replay(
+                view,
+                (saved_state, *(stroke.brush_state for stroke in session.strokes)),
+            )
         except Exception as error:
             on_error(error)
             return
@@ -116,7 +134,7 @@ class KritaHost:
                 return
             finished = True
             try:
-                self._brush_settings.apply(view, saved_state)
+                apply_state(saved_state)
             except Exception as restore_error:
                 if error is None:
                     error = RuntimeError(
@@ -131,10 +149,6 @@ class KritaHost:
             else:
                 on_error(error)
 
-        def apply_recorded_state(state: BrushState) -> None:
-            self._brush_settings.apply(view, state)
-
-        apply_state = apply_recorded_state if use_original_settings else None
         try:
             self._replayer.replay(
                 document,
