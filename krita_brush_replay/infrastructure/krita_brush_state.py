@@ -50,8 +50,12 @@ class KritaBrushStateAdapter:
 
         def apply(state: BrushState) -> None:
             self._apply(view, state, resources)
-            if not _brush_states_match(self.capture(view), state):
-                raise RuntimeError("Krita could not apply all recorded brush settings")
+            mismatches = _brush_state_mismatches(self.capture(view), state)
+            if mismatches:
+                raise RuntimeError(
+                    "Krita could not apply recorded brush settings: "
+                    + ", ".join(mismatches)
+                )
 
         return apply
 
@@ -147,28 +151,42 @@ def _capture_resource(resource, expected_type: str) -> ResourceRef:
     )
 
 
-def _brush_states_match(actual: BrushState, expected: BrushState) -> bool:
-    return (
-        actual.preset == expected.preset
-        and actual.pattern == expected.pattern
-        and actual.blending_mode == expected.blending_mode
-        and _colors_match(actual.foreground, expected.foreground)
-        and _colors_match(actual.background, expected.background)
-        and all(
-            isclose(
-                actual_value,
-                expected_value,
-                rel_tol=0.0,
-                abs_tol=_FLOAT_ABS_TOLERANCE,
-            )
-            for actual_value, expected_value in (
-                (actual.size, expected.size),
-                (actual.opacity, expected.opacity),
-                (actual.flow, expected.flow),
-                (actual.rotation, expected.rotation),
-            )
+def _brush_state_mismatches(
+    actual: BrushState,
+    expected: BrushState,
+) -> tuple[str, ...]:
+    mismatches = []
+    exact_settings = (
+        ("preset", actual.preset, expected.preset),
+        ("pattern", actual.pattern, expected.pattern),
+        ("blending mode", actual.blending_mode, expected.blending_mode),
+    )
+    numeric_settings = (
+        ("size", actual.size, expected.size),
+        ("opacity", actual.opacity, expected.opacity),
+        ("flow", actual.flow, expected.flow),
+        ("rotation", actual.rotation, expected.rotation),
+    )
+    mismatches.extend(
+        name
+        for name, actual_value, expected_value in exact_settings
+        if actual_value != expected_value
+    )
+    if not _colors_match(actual.foreground, expected.foreground):
+        mismatches.append("foreground colour")
+    if not _colors_match(actual.background, expected.background):
+        mismatches.append("background colour")
+    mismatches.extend(
+        name
+        for name, actual_value, expected_value in numeric_settings
+        if not isclose(
+            actual_value,
+            expected_value,
+            rel_tol=0.0,
+            abs_tol=_FLOAT_ABS_TOLERANCE,
         )
     )
+    return tuple(mismatches)
 
 
 def _colors_match(actual: ColorState, expected: ColorState) -> bool:
