@@ -25,7 +25,6 @@ class ReplayHost(Protocol):
     def replay(
         self,
         session: RecordingSession,
-        target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
         *,
@@ -189,18 +188,14 @@ class BrushReplayService:
         if session is None or not session.strokes:
             return
         try:
-            if self._host.active_context() != session.origin:
-                self._set_message(
-                    "Replay requires the same document and layer used for recording."
-                )
-                return
             self._mode = ServiceMode.REPLAYING
             settings_name = "recorded" if use_original_settings else "current"
-            self._message = f"Replaying with {settings_name} brush settings…"
+            self._message = (
+                f"Replaying on the active layer with {settings_name} brush settings…"
+            )
             self._notify()
             self._host.replay(
                 session,
-                session.origin,
                 self._replay_completed,
                 self._replay_failed,
                 use_original_settings=use_original_settings,

@@ -23,6 +23,10 @@ class KritaHost:
         self._replayer = KritaReplayer(self.active_context)
 
     def active_context(self) -> ContextRef | None:
+        target = self._active_target()
+        return None if target is None else target[2]
+
+    def _active_target(self) -> tuple[object, object, ContextRef] | None:
         document = self._active_document()
         if document is None:
             return None
@@ -34,7 +38,7 @@ class KritaHost:
         layer_id = _stable_object_id(node)
         if document_id is None or layer_id is None:
             return None
-        return ContextRef(document_id, layer_id)
+        return document, node, ContextRef(document_id, layer_id)
 
     def is_canvas_target(self, target) -> bool:
         window = _call(self._krita, "activeWindow")
@@ -87,17 +91,16 @@ class KritaHost:
     def replay(
         self,
         session: RecordingSession,
-        target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
         *,
         use_original_settings: bool,
     ) -> None:
-        document = self._active_document()
-        if document is None or self.active_context() != target:
-            on_error(RuntimeError("the active document or layer changed"))
+        active_target = self._active_target()
+        if active_target is None:
+            on_error(RuntimeError("select a writable paint layer first"))
             return
-        node = _call(document, "activeNode")
+        document, node, target = active_target
         if not use_original_settings:
             try:
                 self._replayer.replay(

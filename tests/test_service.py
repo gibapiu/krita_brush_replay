@@ -52,13 +52,15 @@ class FakeHost:
     def replay(
         self,
         session: RecordingSession,
-        target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
         *,
         use_original_settings: bool,
     ) -> None:
-        self.replayed.append((session, target))
+        if self.context is None:
+            on_error(RuntimeError("select a writable paint layer first"))
+            return
+        self.replayed.append((session, self.context))
         self.replay_original_settings.append(use_original_settings)
         self._on_complete = on_complete
         self._on_error = on_error
@@ -195,15 +197,16 @@ def test_capture_failure_stops_recording_and_discards_partial_stroke() -> None:
     assert service.session.strokes == ()
 
 
-def test_replay_uses_origin_as_the_initial_target() -> None:
+def test_replay_uses_the_active_layer_as_the_target() -> None:
     host = FakeHost()
     service = BrushReplayService(host)
     record_one_stroke(service)
+    host.context = OTHER_LAYER
 
     service.replay()
 
     assert service.session is not None
-    assert host.replayed == [(service.session, service.session.origin)]
+    assert host.replayed == [(service.session, OTHER_LAYER)]
     assert host.replay_original_settings == [True]
     assert service.state.mode is ServiceMode.IDLE
     assert "complete" in service.state.message.lower()
@@ -219,16 +222,16 @@ def test_current_settings_replay_is_an_explicit_comparison_mode() -> None:
     assert host.replay_original_settings == [False]
 
 
-def test_replay_rejects_a_different_active_layer() -> None:
+def test_replay_reports_when_there_is_no_active_paint_layer() -> None:
     host = FakeHost()
     service = BrushReplayService(host)
     record_one_stroke(service)
-    host.context = OTHER_LAYER
+    host.context = None
 
     service.replay()
 
     assert host.replayed == []
-    assert "same document and layer" in service.state.message.lower()
+    assert "select a writable paint layer" in service.state.message.lower()
 
 
 def test_replay_without_strokes_is_a_silent_no_op() -> None:
