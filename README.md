@@ -9,18 +9,29 @@ Krita plugin to record freehand brush strokes and replay the same movement with 
 - Records mouse and tablet strokes on one paint layer.
 - Keeps position, pressure, timing, estimated speed, tilt, rotation, and tangential pressure.
 - Captures each stroke's preset, colours, size, opacity, flow, rotation, pattern, and blending mode.
-- Replays each stroke with its recorded settings by default.
-- Keeps current-settings replay as a comparison mode.
+- Replays each stroke with its recorded settings (default) or with current brush settings by your choice.
 
 ## Limits
 
-Recordings stay in memory and are tied to one document and layer. On current stable Krita releases, replay can create several undo steps, reset brush dynamics between short sections, and round positions to whole pixels. Brushes that depend on tilt, speed, distance, timing, or randomness may not match the original exactly.
+Recordings stay in memory and are tied to one document and layer. 
+On current stable Krita releases, replay can create several undo steps, reset brush dynamics between short sections, and round positions to whole pixels. Brushes that depend on tilt, speed, distance, timing, or randomness may not match the original exactly.
 
 ## Install
 
-Copy `krita_brush_replay.desktop` and the `krita_brush_replay` folder into Krita's `pykrita` resource folder.
+No release configured atm, so simply zip plugin from the source:
 
-Restart Krita, enable **Brush Replay** in **Settings → Configure Krita → Python Plugin Manager**, restart again, then open **Settings → Dockers → Brush Replay**.
+```bash
+zip -r krita_brush_replay_plugin.zip krita_brush_replay.desktop krita_brush_replay/
+```
+
+1. Open Krita.
+2. Navigate to **Tools → Scripts → Import Python Plugin from File...** and upload your `krita_brush_replay_plugin.zip`.
+3. Restart Krita.
+4. Enable **Brush Replay** in **Settings → Configure Krita → Python Plugin Manager**
+5. Restart Krita again.
+6. Open and check **Settings → Dockers → Brush Replay**.
+7. ...
+8. Profit!
 
 ## Use
 
@@ -31,12 +42,12 @@ Restart Krita, enable **Brush Replay** in **Settings → Configure Krita → Pyt
 5. Press **Replay original settings** to reproduce the captured settings, or choose
    new settings and press **Compare with current settings**.
 
-Starting a new recording replaces the previous recording. Changing the document or
-layer stops recording. The settings selected before replay are restored when replay
-finishes or fails. Do not change tools or brush settings while replay is running.
+Starting a new recording replaces the previous recording. Changing the document or layer stops recording. 
+The settings selected before replay are restored when replay finishes or fails. 
 
-Replay promises the same captured settings, not identical pixels. Random brush
-engines and Krita's legacy line fallback can produce different pixels.
+⚠️ Do not change tools or brush settings while replay is running.
+
+⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and Krita's legacy line fallback can produce different pixels.
 
 ## Test
 
