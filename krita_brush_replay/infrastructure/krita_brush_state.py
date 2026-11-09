@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from math import isclose
 
 from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
 
@@ -12,6 +13,7 @@ _RESOURCE_TYPE_NAMES = {
     "preset": ("paintoppresets", "preset"),
     "pattern": ("patterns", "pattern"),
 }
+_FLOAT_ABS_TOLERANCE = 1e-6
 
 
 class KritaBrushStateAdapter:
@@ -48,7 +50,7 @@ class KritaBrushStateAdapter:
 
         def apply(state: BrushState) -> None:
             self._apply(view, state, resources)
-            if self.capture(view) != state:
+            if not _brush_states_match(self.capture(view), state):
                 raise RuntimeError("Krita could not apply all recorded brush settings")
 
         return apply
@@ -100,16 +102,15 @@ class KritaBrushStateAdapter:
             }
             available_names = {name for name, _filename in available_by_identity}
             for reference in required:
-                cached = self._captured_resources.get(reference)
-                if reference.name in available_names and cached is not None:
-                    if _resource_matches(cached, reference):
-                        resolved[reference] = cached
-                        continue
                 resource = available_by_identity.get(
                     (reference.name, reference.filename)
                 )
                 if resource is not None:
                     resolved[reference] = resource
+                    continue
+                cached = self._captured_resources.get(reference)
+                if reference.name in available_names and cached is not None:
+                    resolved[reference] = cached
 
         missing = references - resolved.keys()
         if missing:
@@ -146,10 +147,48 @@ def _capture_resource(resource, expected_type: str) -> ResourceRef:
     )
 
 
-def _resource_matches(resource, reference: ResourceRef) -> bool:
+def _brush_states_match(actual: BrushState, expected: BrushState) -> bool:
     return (
-        str(resource.name()) == reference.name
-        and str(resource.filename()) == reference.filename
+        actual.preset == expected.preset
+        and actual.pattern == expected.pattern
+        and actual.blending_mode == expected.blending_mode
+        and _colors_match(actual.foreground, expected.foreground)
+        and _colors_match(actual.background, expected.background)
+        and all(
+            isclose(
+                actual_value,
+                expected_value,
+                rel_tol=0.0,
+                abs_tol=_FLOAT_ABS_TOLERANCE,
+            )
+            for actual_value, expected_value in (
+                (actual.size, expected.size),
+                (actual.opacity, expected.opacity),
+                (actual.flow, expected.flow),
+                (actual.rotation, expected.rotation),
+            )
+        )
+    )
+
+
+def _colors_match(actual: ColorState, expected: ColorState) -> bool:
+    return (
+        actual.model == expected.model
+        and actual.depth == expected.depth
+        and actual.profile == expected.profile
+        and len(actual.components) == len(expected.components)
+        and all(
+            isclose(
+                actual_value,
+                expected_value,
+                rel_tol=0.0,
+                abs_tol=_FLOAT_ABS_TOLERANCE,
+            )
+            for actual_value, expected_value in zip(
+                actual.components,
+                expected.components,
+            )
+        )
     )
 
 
