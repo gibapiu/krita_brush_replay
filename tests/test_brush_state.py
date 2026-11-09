@@ -61,6 +61,7 @@ class FakeView:
         self.pattern = pattern
         self.blending_mode = "multiply"
         self.ignore_blending_mode = False
+        self.readback_drift = 0.0
 
     def currentBrushPreset(self):
         return self.preset
@@ -72,16 +73,16 @@ class FakeView:
         return self.background
 
     def brushSize(self) -> float:
-        return self.size
+        return self.size + self.readback_drift
 
     def paintingOpacity(self) -> float:
-        return self.opacity
+        return self.opacity + self.readback_drift
 
     def paintingFlow(self) -> float:
-        return self.flow
+        return self.flow + self.readback_drift
 
     def brushRotation(self) -> float:
-        return self.rotation
+        return self.rotation + self.readback_drift
 
     def currentPattern(self):
         return self.pattern
@@ -94,9 +95,11 @@ class FakeView:
 
     def setForeGroundColor(self, value) -> None:
         self.foreground = value
+        self._drift_color(self.foreground)
 
     def setBackGroundColor(self, value) -> None:
         self.background = value
+        self._drift_color(self.background)
 
     def setBrushSize(self, value: float) -> None:
         self.size = value
@@ -116,6 +119,12 @@ class FakeView:
     def setCurrentBlendingMode(self, value: str) -> None:
         if not self.ignore_blending_mode:
             self.blending_mode = value
+
+    def _drift_color(self, value: FakeColor) -> None:
+        if self.readback_drift:
+            components = value.components()
+            components[0] += self.readback_drift
+            value.setComponents(components)
 
 
 class FakeKrita:
@@ -182,6 +191,22 @@ def test_captured_resource_is_reused_when_another_resource_has_the_same_name() -
     assert sorted(krita.requests) == ["pattern", "preset"]
 
 
+def test_fresh_resource_replaces_a_stale_captured_object() -> None:
+    stale_preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    fresh_preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(stale_preset, pattern)
+    adapter = KritaBrushStateAdapter(
+        FakeKrita((fresh_preset, pattern)),
+        FakeColor,
+    )
+    recorded = adapter.capture(view)
+
+    adapter.prepare_replay(view, (recorded,))(recorded)
+
+    assert view.preset is fresh_preset
+
+
 def test_deleted_resource_is_rejected_before_an_applier_is_returned() -> None:
     preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
     pattern = FakeResource("patterns", "Paper", "paper.pat")
@@ -201,6 +226,32 @@ def test_apply_reports_a_setting_that_krita_silently_rejects() -> None:
     recorded = adapter.capture(view)
     view.blending_mode = "normal"
     view.ignore_blending_mode = True
+    apply = adapter.prepare_replay(view, (recorded,))
+
+    with pytest.raises(RuntimeError, match="could not apply"):
+        apply(recorded)
+
+
+def test_apply_accepts_harmless_numeric_readback_drift() -> None:
+    preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(preset, pattern)
+    adapter = KritaBrushStateAdapter(FakeKrita((preset, pattern)), FakeColor)
+    recorded = adapter.capture(view)
+    view.readback_drift = 0.5e-6
+
+    adapter.prepare_replay(view, (recorded,))(recorded)
+
+    assert adapter.capture(view) != recorded
+
+
+def test_apply_rejects_numeric_readback_outside_tolerance() -> None:
+    preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(preset, pattern)
+    adapter = KritaBrushStateAdapter(FakeKrita((preset, pattern)), FakeColor)
+    recorded = adapter.capture(view)
+    view.readback_drift = 2e-6
     apply = adapter.prepare_replay(view, (recorded,))
 
     with pytest.raises(RuntimeError, match="could not apply"):
