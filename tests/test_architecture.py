@@ -57,6 +57,7 @@ def test_krita_imports_are_confined_to_infrastructure() -> None:
         PACKAGE / "infrastructure" / "krita_facade.py",
         PACKAGE / "infrastructure" / "krita_host.py",
         PACKAGE / "infrastructure" / "krita_replay.py",
+        PACKAGE / "infrastructure" / "krita_brush_state.py",
     }
     violations: list[str] = []
     for path in PACKAGE.rglob("*.py"):

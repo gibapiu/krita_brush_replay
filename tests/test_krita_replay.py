@@ -1,9 +1,13 @@
 from collections.abc import Callable
+from dataclasses import replace
 
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
+    ColorState,
     ContextRef,
     RecordingSession,
+    ResourceRef,
     Stroke,
 )
 from krita_brush_replay.infrastructure.krita_replay import (
@@ -12,6 +16,17 @@ from krita_brush_replay.infrastructure.krita_replay import (
 )
 
 CONTEXT = ContextRef("document", "layer")
+BRUSH_STATE = BrushState(
+    preset=ResourceRef("preset", "Basic", "basic.kpp"),
+    foreground=ColorState("RGBA", "U8", "sRGB", (0.0, 0.0, 0.0, 1.0)),
+    background=ColorState("RGBA", "U8", "sRGB", (1.0, 1.0, 1.0, 1.0)),
+    size=10.0,
+    opacity=1.0,
+    flow=1.0,
+    rotation=0.0,
+    pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+    blending_mode="normal",
+)
 
 
 class FakeNode:
@@ -69,7 +84,10 @@ def line_factories() -> tuple[tuple[str, Callable[[float, float], object]], ...]
 
 
 def session_for(*strokes: tuple[BrushSample, ...]) -> RecordingSession:
-    return RecordingSession(CONTEXT, tuple(Stroke(samples) for samples in strokes))
+    return RecordingSession(
+        CONTEXT,
+        tuple(Stroke(samples, BRUSH_STATE) for samples in strokes),
+    )
 
 
 def replayer(**kwargs) -> KritaReplayer:
@@ -355,6 +373,46 @@ def test_line_replay_does_not_join_separate_recorded_strokes() -> None:
         ((1.0, 2.0), (3.0, 4.0)),
         ((20.0, 21.0), (22.0, 23.0)),
     ]
+
+
+def test_replay_applies_each_recorded_brush_state_before_its_stroke() -> None:
+    node = FakeNode()
+    first_state = BRUSH_STATE
+    second_state = replace(
+        BRUSH_STATE,
+        preset=ResourceRef("preset", "Watercolour", "watercolour.kpp"),
+        foreground=ColorState("RGBA", "U8", "sRGB", (0.8, 0.2, 0.1, 1.0)),
+        background=ColorState("RGBA", "U8", "sRGB", (0.1, 0.2, 0.8, 1.0)),
+        size=25.0,
+        opacity=0.7,
+        flow=0.6,
+        rotation=45.0,
+        pattern=ResourceRef("pattern", "Paper", "paper.pat"),
+        blending_mode="multiply",
+    )
+    session = RecordingSession(
+        CONTEXT,
+        (
+            Stroke((BrushSample(1.0, 1.0, 0.5, 0),), first_state),
+            Stroke((BrushSample(2.0, 2.0, 0.5, 10),), second_state),
+        ),
+    )
+    applied = []
+
+    replayer(
+        point_factories=line_factories(),
+        scheduler=ImmediateScheduler(),
+    ).replay(
+        FakeDocument(),
+        node,
+        session,
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        apply_brush_state=applied.append,
+    )
+
+    assert applied == [first_state, second_state]
 
 
 def test_replay_completion_is_polled_without_blocking() -> None:

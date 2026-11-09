@@ -32,6 +32,60 @@ class ContextRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ResourceRef:
+    """Stable identity for a Krita resource used by a brush."""
+
+    resource_type: str
+    name: str
+    filename: str
+
+    def __post_init__(self) -> None:
+        if not self.resource_type:
+            raise ValueError("resource_type must not be empty")
+        if not self.name:
+            raise ValueError("resource name must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ColorState:
+    """A managed colour represented without retaining a mutable Krita object."""
+
+    model: str
+    depth: str
+    profile: str
+    components: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not self.model or not self.depth or not self.components:
+            raise ValueError("colour state must include a colour space and components")
+
+
+@dataclass(frozen=True, slots=True)
+class BrushState:
+    """Brush settings that Krita can reliably capture and restore."""
+
+    preset: ResourceRef
+    foreground: ColorState
+    background: ColorState
+    size: float
+    opacity: float
+    flow: float
+    rotation: float
+    pattern: ResourceRef
+    blending_mode: str
+
+    def __post_init__(self) -> None:
+        if self.size <= 0:
+            raise ValueError("brush size must be positive")
+        if not 0.0 <= self.opacity <= 1.0:
+            raise ValueError("brush opacity must be between 0.0 and 1.0")
+        if not 0.0 <= self.flow <= 1.0:
+            raise ValueError("brush flow must be between 0.0 and 1.0")
+        if not self.blending_mode:
+            raise ValueError("blending_mode must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
 class BrushSample:
     """One input sample in image coordinates.
 
@@ -63,6 +117,7 @@ class Stroke:
     """A complete freehand input gesture."""
 
     samples: tuple[BrushSample, ...]
+    brush_state: BrushState
 
     def __post_init__(self) -> None:
         if not self.samples:

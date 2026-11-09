@@ -8,6 +8,7 @@ from typing import Protocol
 
 from krita_brush_replay.domain.recording import (
     BrushSample,
+    BrushState,
     ContextRef,
     RecordingSession,
 )
@@ -19,6 +20,7 @@ PointFactory = Callable[[float, float], object]
 NamedPointFactory = tuple[str, PointFactory]
 StrokePointFactory = Callable[..., object]
 ContextProvider = Callable[[], ContextRef | None]
+BrushStateApplier = Callable[[BrushState], None]
 
 
 class Scheduler(Protocol):
@@ -66,6 +68,8 @@ class KritaReplayer:
         target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        *,
+        apply_brush_state: BrushStateApplier | None = None,
     ) -> None:
         continuous_api = self._continuous_replay_api(node)
         if continuous_api is not None:
@@ -79,6 +83,7 @@ class KritaReplayer:
                 float_point_factory,
                 on_complete,
                 on_error,
+                apply_brush_state,
             )
             return
         self._replay_with_lines(
@@ -88,6 +93,7 @@ class KritaReplayer:
             target,
             on_complete,
             on_error,
+            apply_brush_state,
         )
 
     def _replay_continuous(
@@ -100,6 +106,7 @@ class KritaReplayer:
         float_point_factory: PointFactory,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        apply_brush_state: BrushStateApplier | None,
     ) -> None:
         strokes = iter(session.strokes)
 
@@ -116,6 +123,8 @@ class KritaReplayer:
                         on_error,
                     )
                     return
+                if apply_brush_state is not None:
+                    apply_brush_state(stroke.brush_state)
                 method(
                     self._stroke_points(
                         stroke.samples,
@@ -137,6 +146,7 @@ class KritaReplayer:
         target: ContextRef,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
+        apply_brush_state: BrushStateApplier | None,
     ) -> None:
         strokes = iter(session.strokes)
         segments: Iterator[tuple[BrushSample, BrushSample]] | None = None
@@ -146,6 +156,8 @@ class KritaReplayer:
             while True:
                 if segments is None:
                     stroke = next(strokes)
+                    if apply_brush_state is not None:
+                        apply_brush_state(stroke.brush_state)
                     segments = iter(_stroke_segments(stroke.samples))
                 try:
                     return next(segments)

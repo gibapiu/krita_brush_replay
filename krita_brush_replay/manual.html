@@ -3,12 +3,17 @@
 <head><meta charset="utf-8"><title>Brush Replay</title></head>
 <body>
 <h1>Brush Replay</h1>
-<p>Record freehand strokes on one paint layer, then replay their input with the
-brush, colour, and blending settings that are current when you press
-<strong>Replay with current settings</strong>.</p>
+<p>Record freehand strokes on one paint layer, then use <strong>Replay original
+settings</strong> to apply the preset, colours, size, opacity, flow, rotation,
+pattern, and blending mode captured at the start of each stroke.</p>
+<p><strong>Compare with current settings</strong> paints every recorded stroke
+with the settings currently selected in Krita. Your pre-replay settings are
+restored when either replay mode completes or fails.</p>
 <p>This first version keeps recordings in memory and requires the same Krita
 document and layer. On current stable Krita releases, replay can create several
 undo steps, reset brush dynamics between short sections, and round positions to
 whole pixels.</p>
+<p>Replay promises identical settings, not identical pixels. Random brush engines
+and the legacy fallback can still vary.</p>
 </body>
 </html>
