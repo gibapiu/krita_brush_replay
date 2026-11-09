@@ -1,3 +1,5 @@
+import pytest
+
 from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
 
 
@@ -58,6 +60,7 @@ class FakeView:
         self.rotation = 32.0
         self.pattern = pattern
         self.blending_mode = "multiply"
+        self.ignore_blending_mode = False
 
     def currentBrushPreset(self):
         return self.preset
@@ -111,32 +114,39 @@ class FakeView:
         self.pattern = value
 
     def setCurrentBlendingMode(self, value: str) -> None:
-        self.blending_mode = value
+        if not self.ignore_blending_mode:
+            self.blending_mode = value
 
 
 class FakeKrita:
     def __init__(self, resources: tuple[FakeResource, ...]) -> None:
         self._resources = resources
+        self.requests: list[str] = []
 
     def resources(self, resource_type: str) -> dict[str, FakeResource]:
+        self.requests.append(resource_type)
+        reported_type = {
+            "preset": "paintoppresets",
+            "pattern": "patterns",
+        }.get(resource_type)
+        if reported_type is None:
+            return {}
         return {
             resource.name(): resource
             for resource in self._resources
-            if resource.type() == resource_type
+            if resource.type() == reported_type
         }
 
 
 def test_all_supported_brush_settings_round_trip() -> None:
-    preset = FakeResource("preset", "Ink", "ink.kpp")
-    pattern = FakeResource("pattern", "Paper", "paper.pat")
-    other_preset = FakeResource("preset", "Pencil", "pencil.kpp")
-    other_pattern = FakeResource("pattern", "Canvas", "canvas.pat")
+    preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    other_preset = FakeResource("paintoppresets", "Pencil", "pencil.kpp")
+    other_pattern = FakeResource("patterns", "Canvas", "canvas.pat")
     view = FakeView(preset, pattern)
-    adapter = KritaBrushStateAdapter(
-        FakeKrita((preset, pattern, other_preset, other_pattern)),
-        FakeColor,
-    )
-    recorded = adapter.capture(view)
+    recording_adapter = KritaBrushStateAdapter(FakeKrita(()), FakeColor)
+    recorded = recording_adapter.capture(view)
+    other_recorded = recording_adapter.capture(FakeView(other_preset, other_pattern))
 
     view.preset = other_preset
     view.pattern = other_pattern
@@ -147,6 +157,51 @@ def test_all_supported_brush_settings_round_trip() -> None:
     view.blending_mode = "normal"
     view.foreground = color((1.0, 1.0, 1.0, 1.0))
     view.background = color((0.0, 0.0, 0.0, 1.0))
-    adapter.apply(view, recorded)
+    krita = FakeKrita((preset, pattern, other_preset, other_pattern))
+    replay_adapter = KritaBrushStateAdapter(krita, FakeColor)
+    apply = replay_adapter.prepare_replay(view, (recorded, other_recorded))
+    apply(recorded)
 
-    assert adapter.capture(view) == recorded
+    assert replay_adapter.capture(view) == recorded
+    assert sorted(krita.requests) == ["pattern", "preset"]
+
+
+def test_captured_resource_is_reused_when_another_resource_has_the_same_name() -> None:
+    captured_preset = FakeResource("paintoppresets", "Ink", "bundle-a/ink.kpp")
+    hidden_preset = FakeResource("paintoppresets", "Ink", "bundle-b/ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(captured_preset, pattern)
+    krita = FakeKrita((captured_preset, hidden_preset, pattern))
+    adapter = KritaBrushStateAdapter(krita, FakeColor)
+    recorded = adapter.capture(view)
+    view.preset = hidden_preset
+
+    adapter.prepare_replay(view, (recorded,))(recorded)
+
+    assert view.preset is captured_preset
+    assert sorted(krita.requests) == ["pattern", "preset"]
+
+
+def test_deleted_resource_is_rejected_before_an_applier_is_returned() -> None:
+    preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(preset, pattern)
+    adapter = KritaBrushStateAdapter(FakeKrita(()), FakeColor)
+    recorded = adapter.capture(view)
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        adapter.prepare_replay(view, (recorded,))
+
+
+def test_apply_reports_a_setting_that_krita_silently_rejects() -> None:
+    preset = FakeResource("paintoppresets", "Ink", "ink.kpp")
+    pattern = FakeResource("patterns", "Paper", "paper.pat")
+    view = FakeView(preset, pattern)
+    adapter = KritaBrushStateAdapter(FakeKrita((preset, pattern)), FakeColor)
+    recorded = adapter.capture(view)
+    view.blending_mode = "normal"
+    view.ignore_blending_mode = True
+    apply = adapter.prepare_replay(view, (recorded,))
+
+    with pytest.raises(RuntimeError, match="could not apply"):
+        apply(recorded)

@@ -1,4 +1,5 @@
-from krita_brush_replay.domain.recording import InputPhase
+from krita_brush_replay.app.service import BrushReplayService, ServiceMode
+from krita_brush_replay.domain.recording import BrushSample, ContextRef, InputPhase
 from krita_brush_replay.infrastructure.input_filter import (
     CanvasInputFilter,
     _event_type,
@@ -124,6 +125,42 @@ def test_event_filter_contains_and_reports_callback_errors() -> None:
     assert not consumed
     assert len(errors) == 1
     assert str(errors[0]) == "capture failed"
+
+
+class FailingBrushStateHost(FakeHost):
+    def active_context(self) -> ContextRef:
+        return ContextRef("document", "layer")
+
+    def capture_brush_state(self):
+        raise RuntimeError("active brush settings are unavailable")
+
+
+class PressFilter(CanvasInputFilter):
+    def _dispatch(self, watched, event) -> None:
+        self._handler(
+            InputPhase.PRESS,
+            BrushSample(1.0, 2.0, 0.5, 0),
+        )
+
+
+def test_brush_state_capture_failure_stops_recording_with_a_useful_message() -> None:
+    host = FailingBrushStateHost(object())
+    service = BrushReplayService(host)
+    service.start_recording()
+    input_filter = PressFilter(
+        host,
+        service.accept_input,
+        service.capture_failed,
+    )
+
+    input_filter.eventFilter(object(), object())
+
+    assert service.state.mode is ServiceMode.IDLE
+    assert service.state.message == (
+        "Recording stopped: active brush settings are unavailable"
+    )
+    assert service.session is not None
+    assert service.session.strokes == ()
 
 
 def test_synthesized_mouse_event_is_rejected() -> None:
