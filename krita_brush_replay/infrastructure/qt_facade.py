@@ -10,4 +10,8 @@ else:
     raise ImportError("Krita has not loaded PyQt5 or PyQt6")
 
 
-__all__ = ["QtCore", "QtGui", "QtWidgets"]
+def qt_enum(owner: object, scope: str, name: str):
+    return getattr(getattr(owner, scope, owner), name)
+
+
+__all__ = ["QtCore", "QtGui", "QtWidgets", "qt_enum"]

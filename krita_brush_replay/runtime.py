@@ -21,12 +21,15 @@ class BrushReplayRuntime:
             panel,
         )
         self._filter_installed = False
+        self._mode = ServiceMode.IDLE
         self._closed = False
 
         panel.record_requested.connect(self._service.start_recording)
         panel.stop_requested.connect(self._service.stop_recording)
         panel.replay_requested.connect(self._service.replay)
         panel.replay_current_requested.connect(self._service.replay_with_current_settings)
+        panel.override_requested.connect(self._service.override_setting)
+        panel.reset_requested.connect(self._service.reset_setting)
         panel.destroyed.connect(self.close)
         self._service.subscribe(self._apply_state)
 
@@ -39,6 +42,18 @@ class BrushReplayRuntime:
             return
         self._panel.apply_state(state)
         self._set_filter_installed(state.mode is ServiceMode.RECORDING)
+        recording_finished = self._mode is ServiceMode.RECORDING and state.can_replay
+        self._mode = state.mode
+        if recording_finished:
+            self._load_brush_choices()
+
+    def _load_brush_choices(self) -> None:
+        try:
+            choices = self._host.brush_choices()
+        except Exception as error:
+            self._panel.show_message(f"Could not list brush resources: {error}")
+            return
+        self._panel.set_choices(choices)
 
     def _set_filter_installed(self, installed: bool) -> None:
         if self._application is None or installed == self._filter_installed:

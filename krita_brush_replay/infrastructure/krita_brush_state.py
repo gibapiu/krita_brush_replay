@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass
 from math import isclose
 
+from krita_brush_replay.domain.brush_override import BrushChoices
 from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
 
 ColorFactory = Callable[[str, str, str], object]
@@ -12,8 +14,47 @@ BrushStateApplier = Callable[[BrushState], None]
 _RESOURCE_TYPE_NAMES = {
     "preset": ("paintoppresets", "preset"),
     "pattern": ("patterns", "pattern"),
+    "gradient": ("gradients", "gradient"),
 }
 _FLOAT_ABS_TOLERANCE = 1e-6
+BLENDING_MODE_LABELS = {
+    "normal": "Normal",
+    "multiply": "Multiply",
+    "screen": "Screen",
+    "overlay": "Overlay",
+    "darken": "Darken",
+    "lighten": "Lighten",
+    "burn": "Burn",
+    "dodge": "Color Dodge",
+    "linear_burn": "Linear Burn",
+    "linear_dodge": "Linear Dodge",
+    "soft_light": "Soft Light (Photoshop)",
+    "hard_light": "Hard Light",
+    "add": "Addition",
+    "subtract": "Subtract",
+    "diff": "Difference",
+    "hue": "Hue",
+    "saturation": "Saturation",
+    "color": "Color",
+    "luminize": "Luminosity",
+    "behind": "Behind",
+    "erase": "Erase",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedBrushSettings:
+    saved_state: BrushState
+    apply: BrushStateApplier
+    restore: Callable[[], None]
+
+
+class KritaColorCodec:
+    def to_qcolor(self, state: ColorState):
+        return _create_color(_managed_color_type(), state).colorForCanvas(None)
+
+    def from_qcolor(self, qcolor) -> ColorState:
+        return _capture_color(_managed_color_type().fromQColor(qcolor))
 
 
 class KritaBrushStateAdapter:
@@ -27,6 +68,7 @@ class KritaBrushStateAdapter:
     def capture(self, view) -> BrushState:
         preset = self._capture_resource(view.currentBrushPreset(), "preset")
         pattern = self._capture_resource(view.currentPattern(), "pattern")
+        gradient = self._capture_resource(view.currentGradient(), "gradient")
         return BrushState(
             preset=preset,
             foreground=_capture_color(view.foregroundColor()),
@@ -36,32 +78,71 @@ class KritaBrushStateAdapter:
             flow=float(view.paintingFlow()),
             rotation=float(view.brushRotation()),
             pattern=pattern,
+            gradient=gradient,
             blending_mode=str(view.currentBlendingMode()),
+        )
+
+    def brush_choices(self) -> BrushChoices:
+        return BrushChoices(
+            presets=self._available_resources("preset"),
+            patterns=self._available_resources("pattern"),
+            gradients=self._available_resources("gradient"),
+            blending_modes=BLENDING_MODE_LABELS,
         )
 
     def prepare_replay(
         self,
         view,
-        states: Iterable[BrushState],
-    ) -> BrushStateApplier:
-        """Resolve all resources before painting and return a checked applier."""
-
-        resources = self._resolve_resources(states)
+        states: Sequence[BrushState],
+    ) -> PreparedBrushSettings:
+        saved_state = self.capture(view)
+        resources = self._resolve_resources((saved_state, *states))
 
         def apply(state: BrushState) -> None:
             self._apply(view, state, resources)
             mismatches = _brush_state_mismatches(self.capture(view), state)
             if mismatches:
                 raise RuntimeError(
-                    "Krita could not apply recorded brush settings: "
+                    "Krita did not accept brush settings: "
                     + ", ".join(mismatches)
                 )
 
-        return apply
+        preset_baselines = self._preset_baselines(view, states, saved_state, resources)
+
+        def restore() -> None:
+            try:
+                for baseline in preset_baselines:
+                    apply(baseline)
+            finally:
+                apply(saved_state)
+
+        return PreparedBrushSettings(saved_state, apply, restore)
+
+    def _preset_baselines(
+        self,
+        view,
+        states: Sequence[BrushState],
+        saved_state: BrushState,
+        resources: dict[ResourceRef, object],
+    ) -> tuple[BrushState, ...]:
+        other_presets = dict.fromkeys(
+            state.preset for state in states if state.preset != saved_state.preset
+        )
+        if not other_presets:
+            return ()
+        try:
+            baselines = []
+            for preset in other_presets:
+                view.setCurrentBrushPreset(resources[preset])
+                baselines.append(self.capture(view))
+            return tuple(baselines)
+        finally:
+            self._apply(view, saved_state, resources)
 
     def _apply(self, view, state: BrushState, resources: dict[ResourceRef, object]) -> None:
         preset = resources[state.preset]
         pattern = resources[state.pattern]
+        gradient = resources[state.gradient]
         foreground = self._create_color(state.foreground)
         background = self._create_color(state.background)
 
@@ -73,7 +154,17 @@ class KritaBrushStateAdapter:
         view.setPaintingFlow(state.flow)
         view.setBrushRotation(state.rotation)
         view.setCurrentPattern(pattern)
+        view.setCurrentGradient(gradient)
         view.setCurrentBlendingMode(state.blending_mode)
+
+    def _available_resources(self, resource_type: str) -> tuple[ResourceRef, ...]:
+        _reported_type, lookup_type = _RESOURCE_TYPE_NAMES[resource_type]
+        references = {
+            ResourceRef(resource_type, str(resource.name()), str(resource.filename()))
+            for resource in self._krita.resources(lookup_type).values()
+            if resource.name()
+        }
+        return tuple(sorted(references, key=lambda reference: reference.name.lower()))
 
     def _capture_resource(self, resource, resource_type: str) -> ResourceRef:
         reference = _capture_resource(resource, resource_type)
@@ -87,7 +178,7 @@ class KritaBrushStateAdapter:
         references = {
             reference
             for state in states
-            for reference in (state.preset, state.pattern)
+            for reference in (state.preset, state.pattern, state.gradient)
         }
         resolved: dict[ResourceRef, object] = {}
 
@@ -123,21 +214,26 @@ class KritaBrushStateAdapter:
                 key=lambda item: (item.resource_type, item.name, item.filename),
             )
             raise RuntimeError(
-                f"recorded {reference.resource_type} resource is unavailable: "
+                f"{reference.resource_type} resource is unavailable: "
                 f"{reference.name}"
             )
         return resolved
 
     def _create_color(self, state: ColorState):
-        factory = self._color_factory
-        if factory is None:
-            from krita import ManagedColor
+        return _create_color(self._color_factory or _managed_color_type(), state)
 
-            factory = ManagedColor
-        color = factory(state.model, state.depth, state.profile)
-        if color.setComponents(list(state.components)) is False:
-            raise RuntimeError("Krita could not restore a recorded colour")
-        return color
+
+def _managed_color_type() -> ColorFactory:
+    from krita import ManagedColor
+
+    return ManagedColor
+
+
+def _create_color(factory: ColorFactory, state: ColorState):
+    color = factory(state.model, state.depth, state.profile)
+    if color.setComponents(list(state.components)) is False:
+        raise RuntimeError("Krita could not restore a recorded colour")
+    return color
 
 
 def _capture_resource(resource, expected_type: str) -> ResourceRef:
@@ -159,13 +255,12 @@ def _brush_state_mismatches(
     exact_settings = (
         ("preset", actual.preset, expected.preset),
         ("pattern", actual.pattern, expected.pattern),
+        ("gradient", actual.gradient, expected.gradient),
         ("blending mode", actual.blending_mode, expected.blending_mode),
     )
     numeric_settings = (
-        ("size", actual.size, expected.size),
         ("opacity", actual.opacity, expected.opacity),
         ("flow", actual.flow, expected.flow),
-        ("rotation", actual.rotation, expected.rotation),
     )
     mismatches.extend(
         name

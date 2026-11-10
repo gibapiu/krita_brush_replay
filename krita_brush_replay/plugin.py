@@ -24,13 +24,18 @@ def create_dock_widget_class(dock_widget_base: type, application) -> type:
     class BrushReplayDock(dock_widget_base):
         def __init__(self) -> None:
             super().__init__()
+            from krita_brush_replay.infrastructure.krita_brush_state import KritaColorCodec
+            from krita_brush_replay.infrastructure.qt_facade import QtWidgets
             from krita_brush_replay.runtime import BrushReplayRuntime
             from krita_brush_replay.ui.dock import BrushReplayPanel
 
             self.setWindowTitle(DOCK_TITLE)
-            self._panel = BrushReplayPanel(self)
+            self._panel = BrushReplayPanel(KritaColorCodec())
             self._runtime = BrushReplayRuntime(self._panel, krita_instance=application)
-            self.setWidget(self._panel)
+            scroll_area = QtWidgets.QScrollArea(self)
+            scroll_area.setWidgetResizable(True)
+            scroll_area.setWidget(self._panel)
+            self.setWidget(scroll_area)
 
         def canvasChanged(self, canvas) -> None:
             runtime = getattr(self, "_runtime", None)

@@ -9,6 +9,7 @@ from krita_brush_replay.domain.recording import (
     ResourceRef,
     Stroke,
 )
+from krita_brush_replay.infrastructure.krita_brush_state import PreparedBrushSettings
 from krita_brush_replay.infrastructure.krita_host import KritaHost
 
 CONTEXT = ContextRef("document", "layer")
@@ -24,6 +25,7 @@ def brush_state(size: float = 10.0) -> BrushState:
         flow=1.0,
         rotation=0.0,
         pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+        gradient=ResourceRef("gradient", "Ramp", "ramp.svg"),
         blending_mode="normal",
     )
 
@@ -166,7 +168,7 @@ class FakeCanvas:
     def isEnabled(self) -> bool:
         return True
 
-    def setFocus(self) -> None:
+    def setFocus(self, *_reason) -> None:
         self.focused += 1
 
 
@@ -247,12 +249,13 @@ class FakeBrushSettings:
 
     def prepare_replay(self, view, states):
         self.prepared = list(states)
+        saved_state = self.current
 
         def apply(state: BrushState) -> None:
             self.applied.append(state)
             self.current = state
 
-        return apply
+        return PreparedBrushSettings(saved_state, apply, lambda: apply(saved_state))
 
 
 class MissingResourceBrushSettings(FakeBrushSettings):
@@ -357,7 +360,7 @@ def test_current_settings_replay_keeps_settings_unchanged_without_reselecting_pr
         use_original_settings=False,
     )
 
-    assert settings.prepared == [brush_state(99.0)]
+    assert settings.prepared == []
     assert settings.applied == []
     assert callable(replayer.calls[0][1]["apply_brush_state"])
 
