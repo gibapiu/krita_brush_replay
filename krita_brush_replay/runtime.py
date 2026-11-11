@@ -31,6 +31,7 @@ class BrushReplayRuntime:
         self._service.subscribe(self._apply_state)
 
     def canvas_changed(self) -> None:
+        self._host.invalidate_canvas_target()
         self._service.canvas_changed()
 
     def _apply_state(self, state: ServiceState) -> None:
@@ -52,5 +53,6 @@ class BrushReplayRuntime:
         if self._closed:
             return
         self._closed = True
+        self._host.invalidate_canvas_target()
         self._service.unsubscribe(self._apply_state)
         self._set_filter_installed(False)

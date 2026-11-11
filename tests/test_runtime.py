@@ -2,6 +2,14 @@ from krita_brush_replay.app.service import ServiceMode, ServiceState
 from krita_brush_replay.runtime import BrushReplayRuntime
 
 
+class FakeHost:
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate_canvas_target(self) -> None:
+        self.invalidations += 1
+
+
 class FakeApplication:
     def __init__(self) -> None:
         self.installed = []
@@ -25,6 +33,10 @@ class FakePanel:
 class FakeService:
     def __init__(self) -> None:
         self.unsubscribed = []
+        self.canvas_changes = 0
+
+    def canvas_changed(self) -> None:
+        self.canvas_changes += 1
 
     def unsubscribe(self, listener) -> None:
         self.unsubscribed.append(listener)
@@ -37,6 +49,7 @@ def state(mode: ServiceMode) -> ServiceState:
 def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime = object.__new__(BrushReplayRuntime)
     runtime._panel = FakePanel()
+    runtime._host = FakeHost()
     runtime._application = FakeApplication()
     runtime._input_filter = object()
     runtime._filter_installed = False
@@ -75,3 +88,16 @@ def test_runtime_ignores_service_callbacks_after_close() -> None:
     runtime._apply_state(state(ServiceMode.REPLAYING))
 
     assert runtime._panel.states == []
+
+
+def test_runtime_invalidates_replay_canvas_on_switch_and_close() -> None:
+    runtime = runtime_without_qt_construction()
+
+    runtime.canvas_changed()
+
+    assert runtime._host.invalidations == 1
+    assert runtime._service.canvas_changes == 1
+
+    runtime.close()
+
+    assert runtime._host.invalidations == 2

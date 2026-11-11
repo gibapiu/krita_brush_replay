@@ -14,9 +14,17 @@ Krita plugin to record freehand brush strokes and replay the same movement on th
 ## Limits
 
 Recordings stay in memory. Each recording is captured from one document and layer, then can be replayed on the active paint layer.
-On current stable Krita releases, replay can create several undo steps, reset brush dynamics between short sections, and round positions to whole pixels. Brushes that depend on tilt, speed, distance, timing, or randomness may not match the original exactly.
 
-Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded. Original-settings replay re-selects the preset that was active before replay, so unsaved tweaks may not survive that restoration.
+Replay prefers Krita's native continuous-stroke API when available (Krita 5.4+). 
+Krita 5.3 uses queued tablet events on the canvas, preserving each stroke as one gesture with its pressure, tilt, rotation, and timing. 
+The canvas receives focus before replay and a matching leave event after each stroke.
+
+The synthetic fallback uses the canvas where input was recorded. Switching views or documents requires recording on the new canvas first. 
+Changing the document, layer, or canvas transform during replay stops it. 
+Brushes that depend on speed, distance, timing, or randomness may not match the original exactly.
+
+Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.
+Original-settings replay re-selects the preset that was active before replay, so unsaved tweaks may not survive that restoration.
 
 ## Install
 
@@ -49,7 +57,7 @@ Original-settings replay restores the captured pre-replay settings when it finis
 
 ⚠️ Do not change tools or brush settings while replay is running.
 
-⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and Krita's legacy line fallback can produce different pixels.
+⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and event timing can produce different pixels.
 
 ## Test
 

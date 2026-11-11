@@ -5,19 +5,24 @@
 <h1>Brush Replay</h1>
 <p>Record freehand strokes on one paint layer and replay them on the active paint layer.</p>
 <p>
-  Supports two replay modes:
+  <b>Replay modes:</b>
 </p>
 <ul>
-    <li>
-      <strong>Replay original settings</strong> paints on the active layer with the saved preset selection, colours, size, opacity, flow, rotation, pattern, and blending mode captured at the start of each stroke.
-    </li>
-    <li>
-      <strong>Compare with current settings</strong> paints on the active layer with the settings currently selected in Krita and does not change them.
-    </li>
+  <li>
+    <strong>Replay original settings</strong> paints on the active layer with the saved preset selection, colours, size, opacity, flow, rotation, pattern, and blending mode captured at the start of each stroke.
+  </li>
+  <li>
+    <strong>Compare with current settings</strong> paints on the active layer with the settings currently selected in Krita and does not change them.
+  </li>
 </ul>
-<p>This first version keeps recordings in memory. Replay targets the active writable paint layer selected in Krita.
-On current stable Krita releases, replay can create several undo steps, reset brush dynamics between short sections, and round positions to whole pixels.</p>
-<p>Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded. Original-settings replay restores the captured pre-replay settings, but unsaved preset tweaks may not survive the preset being re-selected.</p>
-<p>⚠️ Replay promises identical settings, not identical pixels. Random brush engines and the legacy fallback can still vary.</p>
+<p>
+  <b>⚠️ Limitations</b>
+<p>
+  <ul>
+    <li>Record only one layer. Switching layers or documents will stop current recording and requre a new one</li>
+    <li>Keep recording in memory. A new recording replaces the current one. No history support atm</li>
+    <li>Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.</li>
+    <li>Replay promises identical settings, not identical pixels. Random brush engines and event timing can still vary.</li>
+  </ul>
 </body>
 </html>
