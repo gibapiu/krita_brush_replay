@@ -26,10 +26,10 @@ class BrushReplayPanel(QtWidgets.QWidget):
         self._record_button.setToolTip("Replace the current recording and capture new strokes")
         self._stop_button.setToolTip("Finish recording")
         self._replay_button.setToolTip(
-            "Paint each stroke with the brush settings captured when it began"
+            "Paint on the active layer with the settings captured for each stroke"
         )
         self._replay_current_button.setToolTip(
-            "Paint all recorded geometry using the brush settings currently selected"
+            "Paint on the active layer using the brush settings currently selected"
         )
         self._status_label.setWordWrap(True)
 

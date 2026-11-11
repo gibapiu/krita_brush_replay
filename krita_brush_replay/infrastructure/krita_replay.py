@@ -110,6 +110,20 @@ class KritaReplayer:
     ) -> None:
         strokes = iter(session.strokes)
 
+        def submit_stroke(stroke) -> None:
+            try:
+                self._require_context(target, "during replay")
+                method(
+                    self._stroke_points(
+                        stroke.samples,
+                        stroke_point_factory,
+                        float_point_factory,
+                    )
+                )
+                self._scheduler.call_soon(process_stroke)
+            except Exception as error:
+                on_error(error)
+
         def process_stroke() -> None:
             try:
                 self._require_context(target, "during replay")
@@ -125,14 +139,9 @@ class KritaReplayer:
                     return
                 if apply_brush_state is not None:
                     apply_brush_state(stroke.brush_state)
-                method(
-                    self._stroke_points(
-                        stroke.samples,
-                        stroke_point_factory,
-                        float_point_factory,
-                    )
-                )
-                self._scheduler.call_soon(process_stroke)
+                    self._scheduler.call_soon(lambda: submit_stroke(stroke))
+                    return
+                submit_stroke(stroke)
             except Exception as error:
                 on_error(error)
 
@@ -151,14 +160,15 @@ class KritaReplayer:
         strokes = iter(session.strokes)
         segments: Iterator[tuple[BrushSample, BrushSample]] | None = None
 
-        def next_segment() -> tuple[BrushSample, BrushSample]:
+        def next_segment() -> tuple[BrushSample, BrushSample] | None:
             nonlocal segments
             while True:
                 if segments is None:
                     stroke = next(strokes)
+                    segments = iter(_stroke_segments(stroke.samples))
                     if apply_brush_state is not None:
                         apply_brush_state(stroke.brush_state)
-                    segments = iter(_stroke_segments(stroke.samples))
+                        return None
                 try:
                     return next(segments)
                 except StopIteration:
@@ -169,7 +179,7 @@ class KritaReplayer:
                 self._require_context(target, "during replay")
                 for _ in range(self._replay_batch_size):
                     try:
-                        start, end = next_segment()
+                        segment = next_segment()
                     except StopIteration:
                         self._wait_for_replay(
                             document,
@@ -178,6 +188,10 @@ class KritaReplayer:
                             on_error,
                         )
                         return
+                    if segment is None:
+                        self._scheduler.call_soon(process_batch)
+                        return
+                    start, end = segment
                     self._paint_line(node.paintLine, start, end)
                 self._scheduler.call_soon(process_batch)
             except Exception as error:

@@ -228,7 +228,7 @@ def test_apply_reports_a_setting_that_krita_silently_rejects() -> None:
     view.ignore_blending_mode = True
     apply = adapter.prepare_replay(view, (recorded,))
 
-    with pytest.raises(RuntimeError, match="could not apply"):
+    with pytest.raises(RuntimeError, match="blending mode"):
         apply(recorded)
 
 
@@ -254,5 +254,8 @@ def test_apply_rejects_numeric_readback_outside_tolerance() -> None:
     view.readback_drift = 2e-6
     apply = adapter.prepare_replay(view, (recorded,))
 
-    with pytest.raises(RuntimeError, match="could not apply"):
+    with pytest.raises(
+        RuntimeError,
+        match="foreground colour, background colour, size, opacity, flow, rotation",
+    ):
         apply(recorded)
