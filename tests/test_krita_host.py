@@ -41,8 +41,10 @@ class FakeDocument:
     def __init__(self, node: FakeNode) -> None:
         self.node = node
         self.root = FakeNode("document")
+        self.active_node_calls = 0
 
     def activeNode(self) -> FakeNode:
+        self.active_node_calls += 1
         return self.node
 
     def rootNode(self) -> FakeNode:
@@ -162,7 +164,7 @@ class MissingResourceBrushSettings(FakeBrushSettings):
         raise RuntimeError("recorded preset resource is unavailable: Missing")
 
 
-def test_replay_passes_the_explicit_target_to_the_replayer() -> None:
+def test_replay_resolves_the_active_target_once() -> None:
     document = FakeDocument(FakeNode())
     host = KritaHost(FakeKrita(document))
     replayer = FakeReplayer()
@@ -176,7 +178,6 @@ def test_replay_passes_the_explicit_target_to_the_replayer() -> None:
 
     host.replay(
         session,
-        CONTEXT,
         lambda: None,
         lambda error: None,
         use_original_settings=True,
@@ -185,6 +186,7 @@ def test_replay_passes_the_explicit_target_to_the_replayer() -> None:
     assert len(replayer.calls) == 1
     args, kwargs = replayer.calls[0]
     assert args[0:4] == (document, document.node, session, CONTEXT)
+    assert document.active_node_calls == 1
     assert callable(kwargs["apply_brush_state"])
     assert settings.applied == [brush_state(99.0)]
 
@@ -205,7 +207,6 @@ def test_replay_restores_pre_replay_settings_after_failure() -> None:
 
     host.replay(
         session,
-        CONTEXT,
         lambda: None,
         errors.append,
         use_original_settings=True,
@@ -231,7 +232,6 @@ def test_original_settings_replay_resolves_resources_before_painting() -> None:
 
     host.replay(
         session,
-        CONTEXT,
         lambda: None,
         errors.append,
         use_original_settings=True,
@@ -256,7 +256,6 @@ def test_current_settings_replay_does_not_capture_apply_or_restore_settings() ->
 
     host.replay(
         session,
-        CONTEXT,
         lambda: None,
         lambda error: None,
         use_original_settings=False,

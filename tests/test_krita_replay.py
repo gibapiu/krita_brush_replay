@@ -340,6 +340,63 @@ def test_continuous_replay_applies_settings_before_each_stroke() -> None:
     assert len(node.polyline_strokes) == 2
 
 
+def test_continuous_replay_yields_after_applying_settings() -> None:
+    node = ContinuousNode()
+    scheduler = QueuedScheduler()
+    applied = []
+    replay = replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=scheduler,
+    )
+
+    replay.replay(
+        FakeDocument(),
+        node,
+        session_for((BrushSample(1.0, 2.0, 0.5, 0),)),
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        apply_brush_state=applied.append,
+    )
+    scheduler.run_next()
+
+    assert applied == [BRUSH_STATE]
+    assert node.polyline_strokes == []
+
+    scheduler.run_next()
+
+    assert len(node.polyline_strokes) == 1
+
+
+def test_line_replay_yields_after_applying_settings() -> None:
+    node = FakeNode()
+    scheduler = QueuedScheduler()
+    applied = []
+    replay = replayer(
+        point_factories=line_factories(),
+        scheduler=scheduler,
+    )
+
+    replay.replay(
+        FakeDocument(),
+        node,
+        session_for((BrushSample(1.0, 2.0, 0.5, 0),)),
+        CONTEXT,
+        lambda: None,
+        lambda error: None,
+        apply_brush_state=applied.append,
+    )
+    scheduler.run_next()
+
+    assert applied == [BRUSH_STATE]
+    assert node.lines == []
+
+    scheduler.run_next()
+
+    assert len(node.lines) == 1
+
+
 def test_replay_paints_pressure_aware_segments_in_batches() -> None:
     node = FakeNode()
     document = FakeDocument()
