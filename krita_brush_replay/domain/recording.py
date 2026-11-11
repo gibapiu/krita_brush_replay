@@ -89,8 +89,8 @@ class BrushState:
 class BrushSample:
     """One input sample in image coordinates.
 
-    Continuous replay uses every field. Legacy line replay uses position and
-    pressure because that is all the older Krita API accepts.
+    Native replay uses every field.
+    Tablet replay carries the input axes and timing so Krita can derive speed from the gesture.
     """
 
     x: float

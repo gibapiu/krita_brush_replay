@@ -10,8 +10,12 @@ from krita_brush_replay.domain.recording import (
     RecordingSession,
 )
 from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
-from krita_brush_replay.infrastructure.krita_replay import KritaReplayer
+from krita_brush_replay.infrastructure.krita_replay import KritaReplayer, QtScheduler
 from krita_brush_replay.infrastructure.qt_facade import QtCore
+from krita_brush_replay.infrastructure.synthetic_input import (
+    CanvasInputTarget,
+    SyntheticInputReplayer,
+)
 
 
 class KritaHost:
@@ -20,7 +24,13 @@ class KritaHost:
     def __init__(self, krita_instance=None) -> None:
         self._krita = krita_instance if krita_instance is not None else _krita_instance()
         self._brush_settings = KritaBrushStateAdapter(self._krita)
-        self._replayer = KritaReplayer(self.active_context)
+        self._canvas_target = None
+        scheduler = QtScheduler()
+        self._replayer = KritaReplayer(
+            self.active_context,
+            scheduler=scheduler,
+            synthetic_input=SyntheticInputReplayer(self.replay_input_target, scheduler),
+        )
 
     def active_context(self) -> ContextRef | None:
         target = self._active_target()
@@ -44,17 +54,14 @@ class KritaHost:
         window = _call(self._krita, "activeWindow")
         qwindow = _call(window, "qwindow")
         target_window = _call(target, "window")
-        if qwindow is None or target_window is not qwindow:
+        if qwindow is None or target_window != qwindow:
             return False
         current = target
-        while current is not None and current is not qwindow:
+        while current is not None and current != qwindow:
             class_name = _qt_class_name(current).lower()
             object_name = _string_call(current, "objectName").lower()
-            if (
-                "canvas" in class_name
-                or "openglwidget" in class_name
-                or object_name == "canvas"
-            ):
+            if "canvas" in class_name or "openglwidget" in class_name or object_name == "canvas":
+                self._canvas_target = target
                 return True
             current = _call(current, "parentWidget")
         return False
@@ -67,20 +74,68 @@ class KritaHost:
         view = self._active_view()
         if view is None:
             raise RuntimeError("no active Krita view")
-        canvas_transform = _call(view, "flakeToCanvasTransform")
-        image_transform = _call(view, "flakeToImageTransform")
-        if canvas_transform is None or image_transform is None:
-            raise RuntimeError("Krita did not provide canvas transforms")
-        widget_to_flake, invertible = canvas_transform.inverted()
-        if not invertible:
-            raise RuntimeError("the canvas transform is not invertible")
-        transform = widget_to_flake * image_transform
+        transform = _widget_to_image_transform(view)
 
         def to_image(position: tuple[float, float]) -> tuple[float, float]:
             image_position = transform.map(QtCore.QPointF(*position))
             return float(image_position.x()), float(image_position.y())
 
         return to_image
+
+    def invalidate_canvas_target(self) -> None:
+        self._canvas_target = None
+
+    def replay_input_target(self) -> CanvasInputTarget:
+        """Resolve one stable active-canvas receiver and coordinate mapper."""
+
+        window = _call(self._krita, "activeWindow")
+        qwindow = _call(window, "qwindow")
+        view = _call(window, "activeView")
+        receiver = self._canvas_target
+        if (
+            qwindow is None
+            or view is None
+            or receiver is None
+            or _call(receiver, "window") != qwindow
+        ):
+            raise RuntimeError("the active canvas input target is unavailable; record a stroke on it first")
+        widget_to_image = _widget_to_image_transform(view)
+        image_to_widget, invertible = widget_to_image.inverted()
+        if not invertible:
+            raise RuntimeError("the image transform is not invertible")
+
+        def to_widget(position: tuple[float, float]) -> tuple[float, float]:
+            widget_position = image_to_widget.map(QtCore.QPointF(*position))
+            return float(widget_position.x()), float(widget_position.y())
+
+        def is_valid() -> bool:
+            current_window = _call(self._krita, "activeWindow")
+            current_view = _call(current_window, "activeView")
+            try:
+                current_transform = _widget_to_image_transform(current_view)
+            except RuntimeError:
+                return False
+            return (
+                self._canvas_target is receiver
+                and _call(current_window, "qwindow") == qwindow
+                and _call(receiver, "window") == qwindow
+                and current_transform == widget_to_image
+                and _bool_call(receiver, "isVisible", True)
+                and _bool_call(receiver, "isEnabled", True)
+            )
+
+        def focus() -> None:
+            setter = getattr(receiver, "setFocus", None)
+            if not callable(setter):
+                raise RuntimeError("the active canvas cannot receive focus")
+            reasons = getattr(QtCore.Qt, "FocusReason", QtCore.Qt)
+            reason = getattr(reasons, "OtherFocusReason", None)
+            setter() if reason is None else setter(reason)
+
+        target = CanvasInputTarget(receiver, to_widget, is_valid, focus)
+        if not target.is_valid():
+            raise RuntimeError("the active canvas input target is unavailable")
+        return target
 
     def capture_brush_state(self) -> BrushState:
         view = self._active_view()
@@ -101,19 +156,6 @@ class KritaHost:
             on_error(RuntimeError("select a writable paint layer first"))
             return
         document, node, target = active_target
-        if not use_original_settings:
-            try:
-                self._replayer.replay(
-                    document,
-                    node,
-                    session,
-                    target,
-                    on_complete,
-                    on_error,
-                )
-            except Exception as error:
-                on_error(error)
-            return
 
         view = self._active_view()
         if view is None:
@@ -123,11 +165,20 @@ class KritaHost:
             saved_state = self._brush_settings.capture(view)
             apply_state = self._brush_settings.prepare_replay(
                 view,
-                (saved_state, *(stroke.brush_state for stroke in session.strokes)),
+                (saved_state, *(stroke.brush_state for stroke in session.strokes))
+                if use_original_settings
+                else (saved_state,),
             )
         except Exception as error:
             on_error(error)
             return
+
+        def apply_replay_state(state: BrushState) -> None:
+            if use_original_settings:
+                apply_state(state)
+            elif self._brush_settings.capture(view) != saved_state:
+                # A first synthetic pen hover can load the pen's saved preset.
+                apply_state(saved_state)
 
         finished = False
 
@@ -137,7 +188,8 @@ class KritaHost:
                 return
             finished = True
             try:
-                apply_state(saved_state)
+                if use_original_settings or self._brush_settings.capture(view) != saved_state:
+                    apply_state(saved_state)
             except Exception as restore_error:
                 if error is None:
                     error = RuntimeError(
@@ -160,7 +212,7 @@ class KritaHost:
                 target,
                 lambda: finish(),
                 finish,
-                apply_brush_state=apply_state,
+                apply_brush_state=apply_replay_state,
             )
         except Exception as error:
             finish(error)
@@ -202,3 +254,19 @@ def _stable_object_id(source) -> str | None:
 def _qt_class_name(source) -> str:
     meta_object = _call(source, "metaObject")
     return _string_call(meta_object, "className")
+
+
+def _bool_call(source, name: str, default: bool) -> bool:
+    value = _call(source, name)
+    return default if value is None else bool(value)
+
+
+def _widget_to_image_transform(view):
+    canvas_transform = _call(view, "flakeToCanvasTransform")
+    image_transform = _call(view, "flakeToImageTransform")
+    if canvas_transform is None or image_transform is None:
+        raise RuntimeError("Krita did not provide canvas transforms")
+    widget_to_flake, invertible = canvas_transform.inverted()
+    if not invertible:
+        raise RuntimeError("the canvas transform is not invertible")
+    return widget_to_flake * image_transform
