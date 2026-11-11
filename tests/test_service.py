@@ -25,6 +25,7 @@ def brush_state(size: float = 10.0) -> BrushState:
         flow=1.0,
         rotation=0.0,
         pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+        gradient=ResourceRef("gradient", "Ramp", "ramp.svg"),
         blending_mode="normal",
     )
 
@@ -270,3 +271,90 @@ def test_replay_returns_to_idle_after_async_failure() -> None:
 
     assert service.state.mode is ServiceMode.IDLE
     assert "did not finish" in service.state.message
+
+
+def record_strokes(service: BrushReplayService, count: int) -> None:
+    service.start_recording()
+    for index in range(count):
+        service.accept_input(InputPhase.PRESS, sample(float(index)))
+        service.accept_input(InputPhase.RELEASE, None)
+    service.stop_recording()
+
+
+def replayed_sizes(host: FakeHost) -> list[float]:
+    session, _target = host.replayed[-1]
+    return [stroke.brush_state.size for stroke in session.strokes]
+
+
+def test_override_changes_only_selected_strokes_and_keeps_the_recording() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    record_strokes(service, 3)
+
+    service.override_setting((1,), "size", 30.0)
+    service.replay()
+
+    assert replayed_sizes(host) == [10.0, 30.0, 10.0]
+    assert service.session is not None
+    assert [stroke.brush_state.size for stroke in service.session.strokes] == [10.0] * 3
+    assert [stroke.effective.size for stroke in service.state.strokes] == [10.0, 30.0, 10.0]
+
+
+def test_choosing_the_recorded_value_again_clears_the_override() -> None:
+    host = FakeHost()
+    host.brush_state = brush_state(12.345)
+    service = BrushReplayService(host)
+    record_strokes(service, 1)
+    service.override_setting((0,), "size", 12.36)
+
+    service.override_setting((0,), "size", 12.35)
+
+    assert not service.state.strokes[0].override.overridden_settings
+
+
+def test_current_settings_comparison_ignores_overrides() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    record_strokes(service, 1)
+    service.override_setting((0,), "size", 30.0)
+
+    service.replay_with_current_settings()
+
+    assert replayed_sizes(host) == [10.0]
+
+
+def test_invalid_override_is_reported_and_not_applied() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    record_strokes(service, 2)
+
+    service.override_setting((0, 1), "size", 0.0)
+    service.override_setting((5,), "size", 20.0)
+    service.replay()
+
+    assert replayed_sizes(host) == [10.0, 10.0]
+    assert not any(stroke.override.overridden_settings for stroke in service.state.strokes)
+
+
+def test_new_recording_discards_previous_overrides() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    record_strokes(service, 1)
+    service.override_setting((0,), "size", 30.0)
+
+    record_strokes(service, 1)
+    service.replay()
+
+    assert replayed_sizes(host) == [10.0]
+
+
+def test_settings_cannot_change_while_replaying() -> None:
+    host = FakeHost()
+    host.complete_replay_immediately = False
+    service = BrushReplayService(host)
+    record_strokes(service, 1)
+    service.replay()
+
+    service.override_setting((0,), "size", 30.0)
+
+    assert not service.state.strokes[0].override.overridden_settings

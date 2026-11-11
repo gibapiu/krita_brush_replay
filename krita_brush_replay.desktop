@@ -4,5 +4,5 @@ ServiceTypes=Krita/PythonPlugin
 X-KDE-Library=krita_brush_replay
 X-Python-2-Compatible=false
 Name=Brush Replay
-Comment=Record brush stroke geometry and replay it with current brush settings.
+Comment=Record brush strokes and replay them with recorded, edited, or current brush settings.
 X-Krita-Manual=manual.html

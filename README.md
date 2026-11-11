@@ -2,14 +2,15 @@
 
 ![Krita 5.3+](https://img.shields.io/badge/Krita-5.3%2B-3babff) ![Krita 6.0+](https://img.shields.io/badge/Krita-6.0%2B-3babff)
 
-Krita plugin to record freehand brush strokes and replay the same movement on the active layer with its original or current brush settings.
+Krita plugin to record freehand brush strokes and replay the same movement on the active layer with its original, edited, or current brush settings.
 
 ## What it does
 
 - Records mouse and tablet strokes on one paint layer.
 - Keeps position, pressure, timing, estimated speed, tilt, rotation, and tangential pressure.
-- Captures each stroke's saved preset selection, colours, size, opacity, flow, rotation, pattern, and blending mode.
-- Replays on the active paint layer with recorded settings (default) or current brush settings.
+- Captures each stroke's saved preset selection, colours, size, opacity, flow, rotation, pattern, gradient, and blending mode.
+- Lets you change those settings for one, several, or all strokes and reset any changed setting to its recorded value.
+- Replays on the active paint layer with each stroke's settings (default) or current brush settings.
 
 ## Limits
 
@@ -24,7 +25,10 @@ Changing the document, layer, or canvas transform during replay stops it.
 Brushes that depend on speed, distance, timing, or randomness may not match the original exactly.
 
 Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.
-Original-settings replay re-selects the preset that was active before replay, so unsaved tweaks may not survive that restoration.
+Replay re-selects the preset that was active before replay, so unsaved tweaks may not survive that restoration.
+The blending-mode editor offers common modes only because Krita's scripting API cannot list them all.
+Colours picked in the editor are stored as 8-bit sRGB.
+Some brush engines round, clamp, or ignore size and rotation; replay paints with the values the engine accepts.
 
 ## Install
 
@@ -48,12 +52,17 @@ zip -r krita_brush_replay_plugin.zip krita_brush_replay.desktop krita_brush_repl
 1. Select a writable paint layer and the freehand brush tool.
 2. Press **Record new session** and draw one or more strokes.
 3. Press **Stop**.
-4. Select the paint layer where the replay should be drawn.
-5. Press **Replay original settings** to reproduce the captured settings, or choose
-   new settings and press **Compare with current settings**.
+4. Optionally select strokes in the list (or **Select all strokes**) and change their settings.
+   Settings that differ between selected strokes show —. Press ↺ next to a setting to return the selected strokes
+   to their recorded value. Changed strokes are marked with ✎.
+5. Select the paint layer where the replay should be drawn.
+6. Press **Replay** to paint with each stroke's settings, or choose
+   new settings in Krita and press **Compare with current settings**.
 
 Starting a new recording replaces the previous recording. Changing the document or layer stops recording. Replay always targets the active paint layer.
-Original-settings replay restores the captured pre-replay settings when it finishes or fails. Comparison mode leaves the current settings unchanged.
+Changing a stroke's preset keeps its own size, opacity, flow, rotation, and blending mode unless you change those too.
+Changes never alter the recording and are discarded when a new recording starts. Comparison mode ignores them.
+Replay restores the captured pre-replay settings, and the settings of every preset it used, when it finishes or fails. Comparison mode leaves the current settings unchanged.
 
 ⚠️ Do not change tools or brush settings while replay is running.
 

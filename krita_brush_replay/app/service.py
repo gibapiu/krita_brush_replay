@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Protocol
 
+from krita_brush_replay.domain.brush_override import StrokeSettings
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -41,9 +42,13 @@ class ServiceMode(Enum):
 @dataclass(frozen=True, slots=True)
 class ServiceState:
     mode: ServiceMode
-    stroke_count: int
+    strokes: tuple[StrokeSettings, ...]
     sample_count: int
     message: str
+
+    @property
+    def stroke_count(self) -> int:
+        return len(self.strokes)
 
     @property
     def can_record(self) -> bool:
@@ -69,6 +74,7 @@ class BrushReplayService:
         self._mode = ServiceMode.IDLE
         self._context: ContextRef | None = None
         self._strokes: list[Stroke] = []
+        self._stroke_settings: list[StrokeSettings] = []
         self._active_samples: list[BrushSample] | None = None
         self._active_brush_state: BrushState | None = None
         self._message = "Ready. Record strokes on one paint layer."
@@ -81,7 +87,7 @@ class BrushReplayService:
             sample_count += len(self._active_samples)
         return ServiceState(
             mode=self._mode,
-            stroke_count=len(self._strokes),
+            strokes=tuple(self._stroke_settings),
             sample_count=sample_count,
             message=self._message,
         )
@@ -115,6 +121,7 @@ class BrushReplayService:
             return
         self._context = context
         self._strokes.clear()
+        self._stroke_settings.clear()
         self._discard_active_stroke()
         self._mode = ServiceMode.RECORDING
         self._message = "Recording freehand brush strokes…"
@@ -175,6 +182,17 @@ class BrushReplayService:
         self._message = f"Recording stopped: {error}"
         self._notify()
 
+    def override_setting(
+        self,
+        stroke_indexes: Iterable[int],
+        setting: str,
+        value: object,
+    ) -> None:
+        self._edit_strokes(stroke_indexes, lambda stroke: stroke.overriding(setting, value))
+
+    def reset_setting(self, stroke_indexes: Iterable[int], setting: str) -> None:
+        self._edit_strokes(stroke_indexes, lambda stroke: stroke.resetting(setting))
+
     def replay(self) -> None:
         self._replay(use_original_settings=True)
 
@@ -187,9 +205,11 @@ class BrushReplayService:
         session = self.session
         if session is None or not session.strokes:
             return
+        if use_original_settings:
+            session = self._effective_session(session)
         try:
             self._mode = ServiceMode.REPLAYING
-            settings_name = "recorded" if use_original_settings else "current"
+            settings_name = "stroke" if use_original_settings else "current"
             self._message = (
                 f"Replaying on the active layer with {settings_name} brush settings…"
             )
@@ -203,11 +223,40 @@ class BrushReplayService:
         except Exception as error:
             self._replay_failed(error)
 
+    def _edit_strokes(
+        self,
+        stroke_indexes: Iterable[int],
+        edit: Callable[[StrokeSettings], StrokeSettings],
+    ) -> None:
+        if self._mode is not ServiceMode.IDLE:
+            return
+        try:
+            edited = {index: edit(self._existing_stroke(index)) for index in stroke_indexes}
+        except (AttributeError, IndexError, TypeError, ValueError) as error:
+            self._set_message(f"Could not change stroke settings: {error}")
+            return
+        for index, settings in edited.items():
+            self._stroke_settings[index] = settings
+        self._notify()
+
+    def _existing_stroke(self, stroke_index: int) -> StrokeSettings:
+        if stroke_index not in range(len(self._stroke_settings)):
+            raise IndexError(f"stroke {stroke_index + 1} does not exist")
+        return self._stroke_settings[stroke_index]
+
+    def _effective_session(self, session: RecordingSession) -> RecordingSession:
+        strokes = tuple(
+            replace(stroke, brush_state=settings.effective)
+            for stroke, settings in zip(session.strokes, self._stroke_settings)
+        )
+        return replace(session, strokes=strokes)
+
     def _finish_active_stroke(self) -> None:
         if self._active_samples and self._active_brush_state is not None:
             self._strokes.append(
                 Stroke(tuple(self._active_samples), self._active_brush_state)
             )
+            self._stroke_settings.append(StrokeSettings(self._active_brush_state))
         self._discard_active_stroke()
 
     def _discard_active_stroke(self) -> None:

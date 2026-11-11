@@ -22,6 +22,7 @@ BRUSH_STATE = BrushState(
     flow=1.0,
     rotation=0.0,
     pattern=ResourceRef("pattern", "Canvas", "canvas.pat"),
+    gradient=ResourceRef("gradient", "Ramp", "ramp.svg"),
     blending_mode="normal",
 )
 
