@@ -1,3 +1,5 @@
+import pytest
+
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -64,6 +66,9 @@ class FakePoint:
 
 
 class FakeTransform:
+    def __init__(self, revision: int = 0) -> None:
+        self.revision = revision
+
     def inverted(self):
         return self, True
 
@@ -73,21 +78,31 @@ class FakeTransform:
     def map(self, point) -> FakePoint:
         return FakePoint(point.x() + 10.0, point.y() + 20.0)
 
+    def __eq__(self, other) -> bool:
+        return isinstance(other, FakeTransform) and self.revision == other.revision
+
 
 class FakeView:
+    def __init__(self, revision: int = 0) -> None:
+        self.revision = revision
+
     def flakeToCanvasTransform(self) -> FakeTransform:
-        return FakeTransform()
+        return FakeTransform(self.revision)
 
     def flakeToImageTransform(self) -> FakeTransform:
-        return FakeTransform()
+        return FakeTransform(self.revision)
 
 
 class FakeWindow:
     def __init__(self) -> None:
         self.view = FakeView()
+        self.widget = object()
 
     def activeView(self) -> FakeView:
         return self.view
+
+    def qwindow(self):
+        return self.widget
 
 
 class FakeKrita:
@@ -121,6 +136,87 @@ def test_capture_mapper_maps_input_without_querying_view_again() -> None:
     to_image = host.capture_mapper()
 
     assert to_image((2.0, 3.0)) == (12.0, 23.0)
+
+
+class FakeMetaObject:
+    def className(self) -> str:
+        return "KisCanvasWidget"
+
+
+class FakeCanvas:
+    def __init__(self, window) -> None:
+        self._window = window
+        self.focused = 0
+
+    def window(self):
+        return self._window
+
+    def parentWidget(self):
+        return None
+
+    def metaObject(self) -> FakeMetaObject:
+        return FakeMetaObject()
+
+    def objectName(self) -> str:
+        return "canvas"
+
+    def isVisible(self) -> bool:
+        return True
+
+    def isEnabled(self) -> bool:
+        return True
+
+    def setFocus(self) -> None:
+        self.focused += 1
+
+
+def test_replay_input_target_caches_receiver_transform_and_focus() -> None:
+    krita = FakeKrita(FakeDocument(FakeNode()))
+    host = KritaHost(krita)
+    canvas = FakeCanvas(krita.window.widget)
+
+    assert host.is_canvas_target(canvas)
+    target = host.replay_input_target()
+    target.focus()
+
+    assert target.receiver is canvas
+    assert target.to_widget((2.0, 3.0)) == (12.0, 23.0)
+    assert target.is_valid()
+    assert canvas.focused == 1
+
+
+class FreshViewWindow(FakeWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.revision = 0
+
+    def activeView(self) -> FakeView:
+        return FakeView(self.revision)
+
+
+def test_replay_target_accepts_fresh_wrappers_for_the_same_view() -> None:
+    krita = FakeKrita(FakeDocument(FakeNode()))
+    krita.window = FreshViewWindow()
+    host = KritaHost(krita)
+    canvas = FakeCanvas(krita.window.widget)
+
+    assert host.is_canvas_target(canvas)
+    target = host.replay_input_target()
+
+    assert target.is_valid()
+
+
+def test_replay_target_rejects_a_changed_canvas_transform() -> None:
+    krita = FakeKrita(FakeDocument(FakeNode()))
+    krita.window = FreshViewWindow()
+    host = KritaHost(krita)
+    canvas = FakeCanvas(krita.window.widget)
+    assert host.is_canvas_target(canvas)
+    target = host.replay_input_target()
+
+    krita.window.revision = 1
+
+    assert not target.is_valid()
 
 
 class FakeReplayer:
@@ -242,7 +338,7 @@ def test_original_settings_replay_resolves_resources_before_painting() -> None:
     assert "unavailable" in str(errors[0])
 
 
-def test_current_settings_replay_does_not_capture_apply_or_restore_settings() -> None:
+def test_current_settings_replay_keeps_settings_unchanged_without_reselecting_preset() -> None:
     document = FakeDocument(FakeNode())
     host = KritaHost(FakeKrita(document))
     replayer = FakeReplayer()
@@ -261,7 +357,47 @@ def test_current_settings_replay_does_not_capture_apply_or_restore_settings() ->
         use_original_settings=False,
     )
 
-    assert settings.capture_calls == 0
-    assert settings.prepared == []
+    assert settings.prepared == [brush_state(99.0)]
     assert settings.applied == []
-    assert replayer.calls[0][1].get("apply_brush_state") is None
+    assert callable(replayer.calls[0][1]["apply_brush_state"])
+
+
+def test_replay_target_rejects_a_canvas_switch_in_the_same_window() -> None:
+    krita = FakeKrita(FakeDocument(FakeNode()))
+    host = KritaHost(krita)
+    assert host.is_canvas_target(FakeCanvas(krita.window.widget))
+    target = host.replay_input_target()
+
+    host.invalidate_canvas_target()
+
+    assert not target.is_valid()
+    with pytest.raises(RuntimeError, match="record a stroke"):
+        host.replay_input_target()
+
+
+def test_current_settings_survive_first_pen_device_initialization() -> None:
+    host = KritaHost(FakeKrita(FakeDocument(FakeNode())))
+    settings = FakeBrushSettings()
+    saved_state = settings.current
+    host._brush_settings = settings
+
+    class DeviceSwitchingReplayer:
+        def replay(self, *args, **kwargs) -> None:
+            # Krita can select the pen's preset when it sees the first hover.
+            settings.current = brush_state(5.0)
+            kwargs["apply_brush_state"](args[2].strokes[0].brush_state)
+            assert settings.current == saved_state
+            args[4]()
+
+    host._replayer = DeviceSwitchingReplayer()
+    errors = []
+    host.replay(
+        RecordingSession(CONTEXT, (Stroke((BrushSample(1, 2, 0.5, 0),), brush_state()),)),
+        lambda: None,
+        errors.append,
+        use_original_settings=False,
+    )
+
+    assert settings.applied == [saved_state]
+    assert settings.current == saved_state
+    assert errors == []
