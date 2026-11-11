@@ -72,6 +72,7 @@ class BrushState:
     flow: float
     rotation: float
     pattern: ResourceRef
+    gradient: ResourceRef
     blending_mode: str
 
     def __post_init__(self) -> None:

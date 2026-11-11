@@ -9,12 +9,19 @@
 </p>
 <ul>
   <li>
-    <strong>Replay original settings</strong> paints on the active layer with the saved preset selection, colours, size, opacity, flow, rotation, pattern, and blending mode captured at the start of each stroke.
+    <strong>Replay</strong> paints on the active layer with the saved preset selection, colours, size, opacity, flow, rotation, pattern, gradient, and blending mode captured at the start of each stroke, including any changes you made to them.
   </li>
   <li>
     <strong>Compare with current settings</strong> paints on the active layer with the settings currently selected in Krita and does not change them.
   </li>
 </ul>
+<p>
+  Select one or more strokes in the list or press <strong>Select all strokes</strong> to change their settings.
+  Settings that differ between selected strokes show `—`.
+  Press ↺ next to a setting to return the selected strokes to the recorded value. Changed strokes are marked with ✎. 
+  Changing a preset keeps the stroke's own size, opacity, flow, rotation, and blending mode unless you change those too.
+  Changes never alter the recording, are discarded when a new recording starts, and are ignored by <strong>Compare with current settings</strong>.
+</p>
 <p>
   <b>⚠️ Limitations</b>
 <p>
@@ -22,7 +29,10 @@
     <li>Record only one layer. Switching layers or documents will stop current recording and requre a new one</li>
     <li>Keep recording in memory. A new recording replaces the current one. No history support atm</li>
     <li>Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.</li>
+    <li>Replay restores the captured pre-replay settings and the settings of every preset it used, but unsaved preset tweaks may not survive the preset being re-selected.</li>
     <li>Replay promises identical settings, not identical pixels. Random brush engines and event timing can still vary.</li>
+    <li>The blending-mode editor offers common modes only. Colours picked in the editor are stored as 8-bit sRGB.</li>
+    <li>Some brush engines round, clamp, or ignore size and rotation; replay paints with the values the engine accepts.</li>
   </ul>
 </body>
 </html>

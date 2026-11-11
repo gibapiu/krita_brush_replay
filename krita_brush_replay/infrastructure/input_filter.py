@@ -10,7 +10,7 @@ from krita_brush_replay.domain.recording import (
     InputPhase,
     normalized_input_speed,
 )
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui
+from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, qt_enum
 
 SampleHandler = Callable[[InputPhase, BrushSample | None], None]
 ErrorHandler = Callable[[Exception], None]
@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def _event_type(name: str):
-    event_types = getattr(QtCore.QEvent, "Type", QtCore.QEvent)
-    return getattr(event_types, name)
+    return qt_enum(QtCore.QEvent, "Type", name)
 
 
 _PHASE_BY_EVENT_TYPE = {
@@ -131,8 +130,7 @@ def _input_phase(event) -> InputPhase | None:
 
 
 def _left_button():
-    buttons = getattr(QtCore.Qt, "MouseButton", QtCore.Qt)
-    return getattr(buttons, "LeftButton")
+    return qt_enum(QtCore.Qt, "MouseButton", "LeftButton")
 
 
 def _is_left_press(event) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from krita_brush_replay.domain.brush_override import BrushChoices
 from krita_brush_replay.domain.recording import (
     BrushState,
     ContextRef,
@@ -143,6 +144,9 @@ class KritaHost:
             raise RuntimeError("no active Krita view")
         return self._brush_settings.capture(view)
 
+    def brush_choices(self) -> BrushChoices:
+        return self._brush_settings.brush_choices()
+
     def replay(
         self,
         session: RecordingSession,
@@ -162,23 +166,25 @@ class KritaHost:
             on_error(RuntimeError("no active Krita view"))
             return
         try:
-            saved_state = self._brush_settings.capture(view)
-            apply_state = self._brush_settings.prepare_replay(
+            brush_settings = self._brush_settings.prepare_replay(
                 view,
-                (saved_state, *(stroke.brush_state for stroke in session.strokes))
+                tuple(stroke.brush_state for stroke in session.strokes)
                 if use_original_settings
-                else (saved_state,),
+                else (),
             )
         except Exception as error:
             on_error(error)
             return
 
+        def brush_settings_drifted() -> bool:
+            return self._brush_settings.capture(view) != brush_settings.saved_state
+
         def apply_replay_state(state: BrushState) -> None:
             if use_original_settings:
-                apply_state(state)
-            elif self._brush_settings.capture(view) != saved_state:
+                brush_settings.apply(state)
+            elif brush_settings_drifted():
                 # A first synthetic pen hover can load the pen's saved preset.
-                apply_state(saved_state)
+                brush_settings.restore()
 
         finished = False
 
@@ -188,8 +194,8 @@ class KritaHost:
                 return
             finished = True
             try:
-                if use_original_settings or self._brush_settings.capture(view) != saved_state:
-                    apply_state(saved_state)
+                if use_original_settings or brush_settings_drifted():
+                    brush_settings.restore()
             except Exception as restore_error:
                 if error is None:
                     error = RuntimeError(

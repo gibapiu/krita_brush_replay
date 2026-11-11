@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from importlib import import_module
+from importlib.util import find_spec
 from types import ModuleType, SimpleNamespace
+
+if find_spec("PyQt6") is not None:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import_module("PyQt6.QtWidgets")
 
 if "PyQt5" not in sys.modules and "PyQt6" not in sys.modules:
     pyqt6 = ModuleType("PyQt6")

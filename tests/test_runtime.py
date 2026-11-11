@@ -1,13 +1,7 @@
 from krita_brush_replay.app.service import ServiceMode, ServiceState
+from krita_brush_replay.domain.brush_override import BrushChoices, StrokeSettings
+from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
 from krita_brush_replay.runtime import BrushReplayRuntime
-
-
-class FakeHost:
-    def __init__(self) -> None:
-        self.invalidations = 0
-
-    def invalidate_canvas_target(self) -> None:
-        self.invalidations += 1
 
 
 class FakeApplication:
@@ -25,9 +19,47 @@ class FakeApplication:
 class FakePanel:
     def __init__(self) -> None:
         self.states = []
+        self.choices = []
+        self.messages = []
 
     def apply_state(self, state: ServiceState) -> None:
         self.states.append(state)
+
+    def set_choices(self, choices: BrushChoices) -> None:
+        self.choices.append(choices)
+
+    def show_message(self, message: str) -> None:
+        self.messages.append(message)
+
+
+class FakeHost:
+    def __init__(self, choices: BrushChoices | Exception = BrushChoices()) -> None:
+        self._choices = choices
+        self.invalidations = 0
+
+    def invalidate_canvas_target(self) -> None:
+        self.invalidations += 1
+
+    def brush_choices(self) -> BrushChoices:
+        if isinstance(self._choices, Exception):
+            raise self._choices
+        return self._choices
+
+
+RECORDED_STROKE = StrokeSettings(
+    BrushState(
+        preset=ResourceRef("preset", "Ink", "ink.kpp"),
+        foreground=ColorState("RGBA", "U8", "sRGB", (0.0, 0.0, 0.0, 1.0)),
+        background=ColorState("RGBA", "U8", "sRGB", (1.0, 1.0, 1.0, 1.0)),
+        size=10.0,
+        opacity=1.0,
+        flow=1.0,
+        rotation=0.0,
+        pattern=ResourceRef("pattern", "Paper", "paper.pat"),
+        gradient=ResourceRef("gradient", "Ramp", "ramp.svg"),
+        blending_mode="normal",
+    )
+)
 
 
 class FakeService:
@@ -43,7 +75,7 @@ class FakeService:
 
 
 def state(mode: ServiceMode) -> ServiceState:
-    return ServiceState(mode, 0, 0, "")
+    return ServiceState(mode, (), 0, "")
 
 
 def runtime_without_qt_construction() -> BrushReplayRuntime:
@@ -53,6 +85,7 @@ def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime._application = FakeApplication()
     runtime._input_filter = object()
     runtime._filter_installed = False
+    runtime._mode = ServiceMode.IDLE
     runtime._closed = False
     runtime._service = FakeService()
     return runtime
@@ -101,3 +134,27 @@ def test_runtime_invalidates_replay_canvas_on_switch_and_close() -> None:
     runtime.close()
 
     assert runtime._host.invalidations == 2
+
+
+def test_finishing_a_recording_loads_brush_choices_once() -> None:
+    runtime = runtime_without_qt_construction()
+    choices = BrushChoices(presets=(ResourceRef("preset", "Pencil", "pencil.kpp"),))
+    runtime._host = FakeHost(choices)
+    recorded = ServiceState(ServiceMode.IDLE, (RECORDED_STROKE,), 1, "")
+
+    runtime._apply_state(state(ServiceMode.RECORDING))
+    runtime._apply_state(recorded)
+    runtime._apply_state(recorded)
+
+    assert runtime._panel.choices == [choices]
+
+
+def test_unavailable_brush_choices_are_reported() -> None:
+    runtime = runtime_without_qt_construction()
+    runtime._host = FakeHost(RuntimeError("resources locked"))
+
+    runtime._apply_state(state(ServiceMode.RECORDING))
+    runtime._apply_state(ServiceState(ServiceMode.IDLE, (RECORDED_STROKE,), 1, ""))
+
+    assert runtime._panel.choices == []
+    assert runtime._panel.messages == ["Could not list brush resources: resources locked"]
