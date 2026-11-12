@@ -68,6 +68,22 @@ Replay restores the captured pre-replay settings, and the settings of every pres
 
 ⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and event timing can produce different pixels.
 
+## Reporting pressure problems
+
+1. Record a few short strokes with light, heavy, and varying pen pressure, then press **Stop**.
+2. Run **Replay**, and optionally **Compare with current settings**. Note which one differs.
+3. Press **Export diagnostic report…** in the Brush Replay docker and save the text file.
+4. Fill in the tester notes at the top of the file, including the tablet model, driver,
+   steps to reproduce, and expected versus actual pressure. Attach the file to your bug report.
+
+Diagnostics are collected automatically while the docker is open and also appear in Krita's
+output with a `[Brush Replay]` prefix. Export is available while recording and replay are stopped.
+The report includes a build marker and report ID, OS and Krita/Qt versions, relevant input
+settings, brush preset names, capture and replay pressure summaries, ignored mouse event
+counts, and plugin errors. It contains no canvas image or document contents.
+Only the most recent 2,000 log records are retained in memory; discarded history is marked
+in the report. Export soon after reproducing the problem. Closing Krita clears this history.
+
 ## Test
 
 ```bash

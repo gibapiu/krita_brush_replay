@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from krita_brush_replay.domain.brush_override import BrushChoices
@@ -17,6 +18,8 @@ from krita_brush_replay.infrastructure.synthetic_input import (
     CanvasInputTarget,
     SyntheticInputReplayer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class KritaHost:
@@ -99,7 +102,9 @@ class KritaHost:
             or receiver is None
             or _call(receiver, "window") != qwindow
         ):
-            raise RuntimeError("the active canvas input target is unavailable; record a stroke on it first")
+            raise RuntimeError(
+                "the active canvas input target is unavailable; record a stroke on it first"
+            )
         widget_to_image = _widget_to_image_transform(view)
         image_to_widget, invertible = widget_to_image.inverted()
         if not invertible:
@@ -142,7 +147,45 @@ class KritaHost:
         view = self._active_view()
         if view is None:
             raise RuntimeError("no active Krita view")
-        return self._brush_settings.capture(view)
+        state = self._brush_settings.capture(view)
+        logger.info(
+            "capture-brush preset=%r filename=%r size=%s opacity=%s flow=%s",
+            state.preset.name,
+            state.preset.filename,
+            state.size,
+            state.opacity,
+            state.flow,
+        )
+        return state
+
+    def diagnostic_context(self) -> dict[str, object]:
+        """Read just the version and input settings relevant to pressure replay."""
+        context: dict[str, object] = {
+            "krita_version": _call(self._krita, "version"),
+            "qt_version": getattr(QtCore, "QT_VERSION_STR", "unknown"),
+            "pyqt_version": getattr(QtCore, "PYQT_VERSION_STR", "unknown"),
+        }
+        try:
+            reader = getattr(self._krita, "readSetting", None)
+            if callable(reader):
+                context["input_settings"] = {
+                    key: reader("", key, default)
+                    for key, default in (
+                        ("tabletPressureCurve", "0,0;1,1;"),
+                        ("LineSmoothingType", "unknown"),
+                        ("LineSmoothingSmoothPressure", "unknown"),
+                        ("LineSmoothingStabilizeSensors", "unknown"),
+                    )
+                }
+            action_getter = getattr(self._krita, "action", None)
+            if callable(action_getter):
+                context["pressure_action_checked"] = _call(
+                    action_getter("disable_pressure"), "isChecked"
+                )
+        except Exception as error:
+            # Diagnostics must not prevent recording on a different Krita build.
+            context["input_settings_error"] = str(error)
+        return context
 
     def brush_choices(self) -> BrushChoices:
         return self._brush_settings.brush_choices()
@@ -160,6 +203,11 @@ class KritaHost:
             on_error(RuntimeError("select a writable paint layer first"))
             return
         document, node, target = active_target
+        logger.info(
+            "replay-start settings=%s strokes=%s",
+            "per-stroke" if use_original_settings else "current",
+            len(session.strokes),
+        )
 
         view = self._active_view()
         if view is None:
@@ -185,6 +233,15 @@ class KritaHost:
             elif brush_settings_drifted():
                 # A first synthetic pen hover can load the pen's saved preset.
                 brush_settings.restore()
+            actual = self._brush_settings.capture(view)
+            logger.info(
+                "replay-brush preset=%r filename=%r size=%s opacity=%s flow=%s",
+                actual.preset.name,
+                actual.preset.filename,
+                actual.size,
+                actual.opacity,
+                actual.flow,
+            )
 
         finished = False
 
@@ -206,8 +263,10 @@ class KritaHost:
                         f"{error}; brush settings could not be restored: {restore_error}"
                     )
             if error is None:
+                logger.info("replay-finished status=complete")
                 on_complete()
             else:
+                logger.error("replay-finished status=failed error=%s", error)
                 on_error(error)
 
         try:

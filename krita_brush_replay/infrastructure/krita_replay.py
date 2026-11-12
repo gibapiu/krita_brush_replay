@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from time import monotonic
 from typing import Protocol
@@ -12,6 +13,9 @@ from krita_brush_replay.domain.recording import (
     ContextRef,
     RecordingSession,
 )
+from krita_brush_replay.infrastructure.diagnostics import PressureTrace
+
+logger = logging.getLogger(__name__)
 
 REPLAY_COMPLETION_POLL_MS = 10
 REPLAY_COMPLETION_TIMEOUT_MS = 120_000
@@ -83,6 +87,7 @@ class KritaReplayer:
     ) -> None:
         continuous_api = self._continuous_replay_api(node)
         if continuous_api is not None:
+            logger.info("replay-api api=paintPolylineStroke")
             method, stroke_point_factory, float_point_factory = continuous_api
             self._replay_continuous(
                 document,
@@ -97,6 +102,7 @@ class KritaReplayer:
             )
             return
         if self._synthetic_input is not None:
+            logger.info("replay-api api=synthetic-tablet-events")
             self._replay_synthetic(
                 document,
                 session,
@@ -125,22 +131,23 @@ class KritaReplayer:
         except Exception as error:
             on_error(error)
             return
-        strokes = iter(session.strokes)
+        strokes = iter(enumerate(session.strokes, start=1))
 
         def process_stroke() -> None:
             try:
                 self._require_context(target, "during replay")
                 try:
-                    stroke = next(strokes)
+                    index, stroke = next(strokes)
                 except StopIteration:
                     on_complete()
                     return
-                self._scheduler.call_soon(lambda: submit_stroke(stroke))
+                self._scheduler.call_soon(lambda: submit_stroke(index, stroke))
             except Exception as error:
                 on_error(error)
 
-        def submit_stroke(stroke) -> None:
+        def submit_stroke(index, stroke) -> None:
             try:
+                _log_stroke(index, stroke.samples)
                 synthetic_input.replay_stroke(
                     canvas_target,
                     stroke.samples,
@@ -175,11 +182,12 @@ class KritaReplayer:
         on_error: Callable[[Exception], None],
         apply_brush_state: BrushStateApplier | None,
     ) -> None:
-        strokes = iter(session.strokes)
+        strokes = iter(enumerate(session.strokes, start=1))
 
-        def submit_stroke(stroke) -> None:
+        def submit_stroke(index, stroke) -> None:
             try:
                 self._require_context(target, "during replay")
+                _log_stroke(index, stroke.samples)
                 method(
                     self._stroke_points(
                         stroke.samples,
@@ -195,7 +203,7 @@ class KritaReplayer:
             try:
                 self._require_context(target, "during replay")
                 try:
-                    stroke = next(strokes)
+                    index, stroke = next(strokes)
                 except StopIteration:
                     self._wait_for_replay(
                         document,
@@ -206,9 +214,9 @@ class KritaReplayer:
                     return
                 if apply_brush_state is not None:
                     apply_brush_state(stroke.brush_state)
-                    self._scheduler.call_soon(lambda: submit_stroke(stroke))
+                    self._scheduler.call_soon(lambda: submit_stroke(index, stroke))
                     return
-                submit_stroke(stroke)
+                submit_stroke(index, stroke)
             except Exception as error:
                 on_error(error)
 
@@ -287,3 +295,10 @@ class KritaReplayer:
                 on_error(error)
 
         self._scheduler.call_soon(poll)
+
+
+def _log_stroke(index: int, samples: tuple[BrushSample, ...]) -> None:
+    trace = PressureTrace()
+    for sample in samples:
+        trace.observe(sample)
+    logger.info("replay-stroke index=%s %s", index, trace)
