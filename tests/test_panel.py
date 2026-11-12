@@ -179,30 +179,3 @@ def test_accepting_the_colour_dialog_without_picking_changes_nothing(panel) -> N
     editor_field(panel, "Foreground").click()
 
     assert requests == []
-
-
-def test_diagnostic_export_requests_a_path_and_handles_cancel(panel, monkeypatch) -> None:
-    requests = []
-    panel.export_report_requested.connect(requests.append)
-    button = next(
-        button
-        for button in panel.findChildren(QtWidgets.QPushButton)
-        if button.text() == "Export diagnostic report…"
-    )
-    monkeypatch.setattr(
-        QtWidgets.QFileDialog,
-        "getSaveFileName",
-        lambda *args: ("/tmp/test-report.txt", "Text reports (*.txt)"),
-    )
-
-    button.click()
-    monkeypatch.setattr(QtWidgets.QFileDialog, "getSaveFileName", lambda *args: ("", ""))
-    button.click()
-
-    assert requests == ["/tmp/test-report.txt"]
-    panel.apply_state(ServiceState(ServiceMode.RECORDING, (), 0, ""))
-    assert not button.isEnabled()
-    panel.apply_state(ServiceState(ServiceMode.REPLAYING, (), 0, ""))
-    assert not button.isEnabled()
-    panel.apply_state(idle())
-    assert button.isEnabled()

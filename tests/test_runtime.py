@@ -1,7 +1,6 @@
 from krita_brush_replay.app.service import ServiceMode, ServiceState
 from krita_brush_replay.domain.brush_override import BrushChoices, StrokeSettings
 from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
-from krita_brush_replay.infrastructure.diagnostics import DiagnosticLog
 from krita_brush_replay.runtime import BrushReplayRuntime
 
 
@@ -46,9 +45,6 @@ class FakeHost:
             raise self._choices
         return self._choices
 
-    def diagnostic_context(self):
-        return {"krita_version": "5.4-test"}
-
 
 RECORDED_STROKE = StrokeSettings(
     BrushState(
@@ -70,7 +66,6 @@ class FakeService:
     def __init__(self) -> None:
         self.unsubscribed = []
         self.canvas_changes = 0
-        self.state = state(ServiceMode.IDLE)
 
     def canvas_changed(self) -> None:
         self.canvas_changes += 1
@@ -83,20 +78,13 @@ def state(mode: ServiceMode) -> ServiceState:
     return ServiceState(mode, (), 0, "")
 
 
-class FakeInputFilter:
-    def __init__(self) -> None:
-        self.finishes = 0
-
-    def finish_capture(self) -> None:
-        self.finishes += 1
-
-
 def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime = object.__new__(BrushReplayRuntime)
     runtime._panel = FakePanel()
     runtime._host = FakeHost()
     runtime._application = FakeApplication()
     runtime._input_filter = FakeInputFilter()
+    runtime._state_listener = None
     runtime._filter_installed = False
     runtime._mode = ServiceMode.IDLE
     runtime._closed = False
@@ -114,7 +102,6 @@ def test_runtime_installs_filter_only_while_recording() -> None:
 
     assert runtime._application.installed == [runtime._input_filter]
     assert runtime._application.removed == [runtime._input_filter]
-    assert runtime._input_filter.finishes == 1
 
 
 def test_runtime_close_removes_an_installed_filter_once() -> None:
@@ -174,34 +161,27 @@ def test_unavailable_brush_choices_are_reported() -> None:
     assert runtime._panel.messages == ["Could not list brush resources: resources locked"]
 
 
-def test_export_snapshots_environment_and_state_before_starting_the_writer() -> None:
+class FakeInputFilter:
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+def test_detaching_filter_resets_gesture_ownership() -> None:
     runtime = runtime_without_qt_construction()
-    runtime._diagnostics = DiagnosticLog()
+    runtime._set_filter_installed(True)
 
-    class Exporter:
-        def export(self, path, report):
-            self.path = path
-            self.report = report
+    runtime._set_filter_installed(False)
 
-    runtime._report_exporter = Exporter()
-
-    runtime.export_diagnostics("report.txt")
-
-    assert runtime._report_exporter.path == "report.txt"
-    assert '"krita_version": "5.4-test"' in runtime._report_exporter.report
-    assert '"service_mode": "IDLE"' in runtime._report_exporter.report
+    assert runtime._input_filter.resets == 1
 
 
-def test_export_start_failure_is_reported_in_the_panel() -> None:
+def test_close_unsubscribes_an_injected_state_listener() -> None:
     runtime = runtime_without_qt_construction()
-    runtime._diagnostics = DiagnosticLog()
+    runtime._state_listener = lambda state: None
 
-    class Exporter:
-        def export(self, path, report):
-            raise OSError("cannot start writer")
+    runtime.close()
 
-    runtime._report_exporter = Exporter()
-
-    runtime.export_diagnostics("report.txt")
-
-    assert runtime._panel.messages == ["Could not export diagnostic report: cannot start writer"]
+    assert runtime._service.unsubscribed == [runtime._apply_state, runtime._state_listener]

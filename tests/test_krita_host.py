@@ -140,46 +140,6 @@ def test_capture_mapper_maps_input_without_querying_view_again() -> None:
     assert to_image((2.0, 3.0)) == (12.0, 23.0)
 
 
-def test_diagnostics_read_only_relevant_input_settings() -> None:
-    krita = FakeKrita(FakeDocument(FakeNode()))
-    reads = []
-
-    def read_setting(group, key, default):
-        reads.append((group, key))
-        return "0,0;0.5,0.8;1,1;" if key == "tabletPressureCurve" else default
-
-    class Action:
-        def isChecked(self):
-            return True
-
-    krita.readSetting = read_setting
-    krita.version = lambda: "5.4.0"
-    krita.action = lambda name: Action() if name == "disable_pressure" else None
-
-    context = KritaHost(krita).diagnostic_context()
-
-    assert context["krita_version"] == "5.4.0"
-    assert context["pressure_action_checked"] is True
-    assert context["input_settings"]["tabletPressureCurve"] == "0,0;0.5,0.8;1,1;"
-    assert {key for group, key in reads if group == ""} == {
-        "tabletPressureCurve",
-        "LineSmoothingType",
-        "LineSmoothingSmoothPressure",
-        "LineSmoothingStabilizeSensors",
-    }
-
-
-def test_unavailable_diagnostic_setting_does_not_break_capture() -> None:
-    krita = FakeKrita(FakeDocument(FakeNode()))
-
-    def read_setting(*args):
-        raise RuntimeError("setting unavailable")
-
-    krita.readSetting = read_setting
-
-    assert KritaHost(krita).diagnostic_context()["input_settings_error"] == "setting unavailable"
-
-
 class FakeMetaObject:
     def className(self) -> str:
         return "KisCanvasWidget"

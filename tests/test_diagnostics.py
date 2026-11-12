@@ -1,8 +1,9 @@
 import logging
 
 from krita_brush_replay.domain.recording import BrushSample
-from krita_brush_replay.infrastructure import diagnostics
-from krita_brush_replay.infrastructure.diagnostics import DiagnosticLog, PressureTrace
+from krita_brush_replay.observability import report as diagnostics
+from krita_brush_replay.observability.pressure import PressureTrace
+from krita_brush_replay.observability.report import DiagnosticLog
 
 
 def test_report_retains_recent_logs_and_marks_discarded_history() -> None:
@@ -22,22 +23,6 @@ def test_report_retains_recent_logs_and_marks_discarded_history() -> None:
     assert '"krita_version": "5.4"' in text
     assert f'"report_id": "{report.report_id}"' in text
     assert diagnostics.DIAGNOSTIC_BUILD in text
-
-
-def test_logging_setup_is_idempotent_and_outputs_info_without_root_configuration(
-    monkeypatch, capsys
-) -> None:
-    logger = logging.Logger("plugin-test")
-    monkeypatch.setattr(diagnostics, "logger", logger)
-
-    report = diagnostics.configure_diagnostics()
-    assert diagnostics.configure_diagnostics() is report
-    logger.info("pressure_min=0.2")
-
-    assert len(logger.handlers) == 2
-    assert capsys.readouterr().err.count("pressure_min=0.2") == 1
-    assert "pressure_min=0.2" in report.render({})
-    assert not logger.propagate
 
 
 def test_long_error_messages_are_bounded_in_the_report() -> None:

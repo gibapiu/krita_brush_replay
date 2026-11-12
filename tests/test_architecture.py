@@ -8,6 +8,8 @@ HOST_PREFIXES = (
     "krita_brush_replay.ui",
     "krita_brush_replay.plugin",
     "krita_brush_replay.runtime",
+    "krita_brush_replay.observability",
+    "krita_brush_replay.composition",
     "krita",
     "PyQt5",
     "PyQt6",
@@ -31,8 +33,7 @@ def test_pure_layers_do_not_import_qt_krita_or_host_layers() -> None:
         for path in directory.rglob("*.py"):
             for module in imported_modules(path):
                 if any(
-                    module == prefix or module.startswith(f"{prefix}.")
-                    for prefix in HOST_PREFIXES
+                    module == prefix or module.startswith(f"{prefix}.") for prefix in HOST_PREFIXES
                 ):
                     violations.append(f"{path}: {module}")
 
@@ -68,3 +69,20 @@ def test_krita_imports_are_confined_to_infrastructure() -> None:
                 violations.append(f"{path}: {module}")
 
     assert violations == []
+
+
+def test_core_does_not_import_observability_or_composition() -> None:
+    paths = [
+        PACKAGE / "runtime.py",
+        PACKAGE / "ui" / "dock.py",
+        *(PACKAGE / "infrastructure").glob("*.py"),
+        *(PACKAGE / "domain").glob("*.py"),
+        *(PACKAGE / "app").glob("*.py"),
+    ]
+    forbidden = ("krita_brush_replay.observability", "krita_brush_replay.composition")
+    assert [
+        (path, module)
+        for path in paths
+        for module in imported_modules(path)
+        if module.startswith(forbidden)
+    ] == []
