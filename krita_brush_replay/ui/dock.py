@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 from krita_brush_replay.app.service import ServiceMode, ServiceState
 from krita_brush_replay.domain.brush_override import BrushChoices, StrokeSettings
 from krita_brush_replay.infrastructure.qt_facade import QtCore, QtWidgets, qt_enum
@@ -19,7 +17,6 @@ class BrushReplayPanel(QtWidgets.QWidget):
     replay_current_requested = QtCore.pyqtSignal()
     override_requested = QtCore.pyqtSignal(object, str, object)
     reset_requested = QtCore.pyqtSignal(object, str)
-    export_report_requested = QtCore.pyqtSignal(str)
 
     def __init__(self, color_codec, parent=None) -> None:
         super().__init__(parent)
@@ -34,10 +31,6 @@ class BrushReplayPanel(QtWidgets.QWidget):
         self._replay_current_button = QtWidgets.QPushButton("Compare with current settings")
         self._count_label = QtWidgets.QLabel("0 strokes · 0 samples")
         self._status_label = QtWidgets.QLabel("")
-        self._export_report_button = QtWidgets.QPushButton("Export diagnostic report…")
-        self._export_report_button.setToolTip(
-            "Save recent input and replay diagnostics to attach to a bug report"
-        )
 
         self._record_button.setCheckable(True)
         self._stroke_list.setSelectionMode(
@@ -70,13 +63,11 @@ class BrushReplayPanel(QtWidgets.QWidget):
         layout.addWidget(self._replay_current_button)
         layout.addWidget(self._count_label)
         layout.addWidget(self._status_label)
-        layout.addWidget(self._export_report_button)
 
         self._record_button.clicked.connect(self.record_requested)
         self._stop_button.clicked.connect(self.stop_requested)
         self._replay_button.clicked.connect(self.replay_requested)
         self._replay_current_button.clicked.connect(self.replay_current_requested)
-        self._export_report_button.clicked.connect(self._choose_report_path)
         self._select_all_button.clicked.connect(self._stroke_list.selectAll)
         self._stroke_list.itemSelectionChanged.connect(self._show_selected_settings)
         self._settings_editor.override_requested.connect(
@@ -95,22 +86,15 @@ class BrushReplayPanel(QtWidgets.QWidget):
     def show_message(self, message: str) -> None:
         self._status_label.setText(message)
 
-    def _choose_report_path(self) -> None:
-        filename = f"brush-replay-report-{datetime.now():%Y%m%d-%H%M%S}.txt"
-        path, _selected_filter = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export diagnostic report", filename, "Text reports (*.txt)"
-        )
-        if path:
-            self.export_report_requested.emit(path)
-
     def apply_state(self, state: ServiceState) -> None:
         self._record_button.setEnabled(state.can_record)
         self._stop_button.setEnabled(state.can_stop)
-        self._export_report_button.setEnabled(state.mode is ServiceMode.IDLE)
         self._replay_button.setEnabled(state.can_replay)
         self._replay_current_button.setEnabled(state.can_replay)
         self._select_all_button.setEnabled(state.can_replay)
-        self._count_label.setText(f"{state.stroke_count} strokes · {state.sample_count} samples")
+        self._count_label.setText(
+            f"{state.stroke_count} strokes · {state.sample_count} samples"
+        )
         self._status_label.setText(state.message)
         self._record_button.setChecked(state.mode is ServiceMode.RECORDING)
         previous_strokes, self._strokes = self._strokes, state.strokes

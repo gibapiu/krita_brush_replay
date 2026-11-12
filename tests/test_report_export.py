@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
 def test_export_reports_background_write_success_or_failure(tmp_path, unwritable) -> None:
     from PyQt6.QtTest import QSignalSpy
 
-    from krita_brush_replay.infrastructure.report_export import ReportExporter
+    from krita_brush_replay.observability.writer import ReportExporter
 
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     exporter = ReportExporter()
