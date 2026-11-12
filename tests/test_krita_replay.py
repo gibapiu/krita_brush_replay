@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from dataclasses import replace
 
@@ -144,7 +145,8 @@ class FakeSyntheticInput:
         on_complete()
 
 
-def test_continuous_api_receives_all_recorded_input_axes() -> None:
+def test_continuous_api_receives_all_recorded_input_axes(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="krita_brush_replay.infrastructure.krita_replay")
     node = ContinuousNode()
     synthetic_input = FakeSyntheticInput()
     samples = (
@@ -195,6 +197,10 @@ def test_continuous_api_receives_all_recorded_input_axes() -> None:
     assert first.speed == 0.4
     assert second.time == 25.0
     assert second.speed == 0.6
+    assert "replay-api api=paintPolylineStroke" in caplog.text
+    assert "replay-stroke index=1 samples=2 pressure_min=0.20000 pressure_max=0.70000" in (
+        caplog.text
+    )
 
 
 def test_synthetic_fallback_finishes_each_stroke_before_changing_settings() -> None:
