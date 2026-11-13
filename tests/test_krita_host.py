@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import pytest
 
 from krita_brush_replay.domain.recording import (
@@ -123,6 +125,22 @@ def test_active_context_uses_stable_document_and_layer_ids() -> None:
     host = KritaHost(FakeKrita(FakeDocument(FakeNode())))
 
     assert host.active_context() == CONTEXT
+
+
+def test_host_provides_current_pressure_mapping_without_observability(monkeypatch) -> None:
+    from krita_brush_replay.infrastructure import krita_host
+
+    application = FakeKrita(FakeDocument(FakeNode()))
+    adapter_type = Mock()
+    adapter_type.return_value.current_mapping.return_value = lambda pressure: pressure * 0.5
+    monkeypatch.setattr(krita_host, "KritaPressureAdapter", adapter_type)
+    replay_factory = Mock()
+
+    KritaHost(application, replayer_factory=replay_factory)
+    provider = replay_factory.call_args.kwargs["pressure_mapper_provider"]
+
+    assert provider()(0.6) == 0.3
+    adapter_type.assert_called_once_with(application)
 
 
 def test_active_context_rejects_objects_without_stable_ids() -> None:

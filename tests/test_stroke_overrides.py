@@ -1,6 +1,7 @@
 import sys
 from time import perf_counter
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -151,6 +152,7 @@ class Layer:
         self._view = view
         self._id = layer_id
         self.painted: list[tuple[str, float, float]] = []
+        self.pressures: list[tuple[float, ...]] = []
 
     def uniqueId(self) -> str:
         return self._id
@@ -161,6 +163,7 @@ class Layer:
     def paintPolylineStroke(self, points) -> None:
         view = self._view
         self.painted.append((view.preset.name(), view.size, view.opacity))
+        self.pressures.append(tuple(point[1] for point in points))
 
 
 class Document:
@@ -196,12 +199,22 @@ class Krita:
         self.layer = Layer(self.view)
         self.document = Document(self.layer)
         self.window = Window(self.view)
+        self.pressure_curve = "0,0;1,1;"
+        self.pen_pressure_enabled = True
 
     def activeDocument(self) -> Document:
         return self.document
 
     def activeWindow(self) -> Window:
         return self.window
+
+    def readSetting(self, group, key, default):
+        return self.pressure_curve if (group, key) == ("", "tabletPressureCurve") else default
+
+    def action(self, name):
+        if name == "disable_pressure":
+            return SimpleNamespace(isChecked=lambda: self.pen_pressure_enabled)
+        return None
 
     def resources(self, resource_type: str) -> dict[str, Resource]:
         reported_type = {
@@ -227,6 +240,9 @@ def krita(monkeypatch) -> Krita:
     module = ModuleType("krita")
     module.ManagedColor = ManagedColor
     module.StrokePoint = lambda *values: values
+    module.KisCubicCurve = Mock()
+    module.KisCubicCurve.return_value.floatTransfer.return_value = [0.0, 1.0]
+    module.KisCubicCurve.interpolateLinear.side_effect = lambda pressure, transfer: pressure
     monkeypatch.setitem(sys.modules, "krita", module)
     monkeypatch.setattr(QtCore, "QTimer", ImmediateTimer, raising=False)
     return Krita()
@@ -301,6 +317,44 @@ def test_bulk_override_with_individual_reset_reaches_the_canvas(krita: Krita) ->
         ("Pencil", 3.0, 0.25),
         ("Ink", 40.0, 0.25),
     ]
+
+
+@pytest.mark.parametrize("current_brush_settings", [False, True])
+def test_both_replay_modes_apply_the_current_curve_to_raw_recordings(
+    krita: Krita, current_brush_settings: bool
+) -> None:
+    service = BrushReplayService(KritaHost(krita))
+    record(service, krita, [krita.presets.ink])
+    replay = service.replay_with_current_settings if current_brush_settings else service.replay
+    curve_type = sys.modules["krita"].KisCubicCurve
+
+    krita.pressure_curve = "0,0;0.5,0.8;1,1;"
+    curve_type.interpolateLinear.side_effect = lambda pressure, transfer: 0.8
+    replay()
+    krita.pressure_curve = "0,0;0.5,0.3;1,1;"
+    curve_type.interpolateLinear.side_effect = lambda pressure, transfer: 0.3
+    replay()
+
+    assert "complete" in service.state.message.lower()
+    assert krita.layer.pressures == [(0.8,), (0.3,)]
+    assert service.session.strokes[0].samples[0].pressure == 0.5
+    assert [call.args[0] for call in curve_type.call_args_list] == [
+        "0,0;0.5,0.8;1,1;",
+        "0,0;0.5,0.3;1,1;",
+    ]
+
+
+def test_replay_honors_the_current_pen_pressure_toggle(krita: Krita) -> None:
+    service = BrushReplayService(KritaHost(krita))
+    record(service, krita, [krita.presets.ink])
+    krita.pen_pressure_enabled = False
+
+    service.replay()
+
+    assert "complete" in service.state.message.lower()
+    assert krita.layer.pressures == [(1.0,)]
+    assert service.session.strokes[0].samples[0].pressure == 0.5
+    sys.modules["krita"].KisCubicCurve.assert_not_called()
 
 
 def test_bulk_editing_a_long_recording_stays_interactive(krita: Krita) -> None:

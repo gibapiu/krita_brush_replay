@@ -11,6 +11,7 @@ from krita_brush_replay.domain.recording import (
     RecordingSession,
 )
 from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
+from krita_brush_replay.infrastructure.krita_pressure import KritaPressureAdapter
 from krita_brush_replay.infrastructure.krita_replay import KritaReplayer, QtScheduler
 from krita_brush_replay.infrastructure.qt_facade import QtCore
 from krita_brush_replay.infrastructure.synthetic_input import (
@@ -31,6 +32,7 @@ class KritaHost:
             self.active_context,
             scheduler=scheduler,
             synthetic_input=SyntheticInputReplayer(self.replay_input_target, scheduler),
+            pressure_mapper_provider=KritaPressureAdapter(self._krita).current_mapping,
         )
 
     def active_context(self) -> ContextRef | None:

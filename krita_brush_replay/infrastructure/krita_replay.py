@@ -19,6 +19,8 @@ PointFactory = Callable[[float, float], object]
 StrokePointFactory = Callable[..., object]
 ContextProvider = Callable[[], ContextRef | None]
 BrushStateApplier = Callable[[BrushState], None]
+PressureMapper = Callable[[float], float]
+PressureMapperProvider = Callable[[], PressureMapper]
 
 
 class Scheduler(Protocol):
@@ -63,12 +65,14 @@ class KritaReplayer:
         stroke_point_factory: StrokePointFactory | None = None,
         scheduler: Scheduler | None = None,
         synthetic_input: SyntheticStrokeInput | None = None,
+        pressure_mapper_provider: PressureMapperProvider | None = None,
     ) -> None:
         self._context_provider = context_provider
         self._float_point_factory = float_point_factory
         self._stroke_point_factory = stroke_point_factory
         self._scheduler = scheduler if scheduler is not None else QtScheduler()
         self._synthetic_input = synthetic_input
+        self._pressure_mapper_provider = pressure_mapper_provider
 
     def replay(
         self,
@@ -175,6 +179,15 @@ class KritaReplayer:
         on_error: Callable[[Exception], None],
         apply_brush_state: BrushStateApplier | None,
     ) -> None:
+        try:
+            pressure_mapper = (
+                self._pressure_mapper_provider()
+                if self._pressure_mapper_provider is not None
+                else float
+            )
+        except Exception as error:
+            on_error(error)
+            return
         strokes = iter(session.strokes)
 
         def submit_stroke(stroke) -> None:
@@ -185,6 +198,7 @@ class KritaReplayer:
                         stroke.samples,
                         stroke_point_factory,
                         float_point_factory,
+                        pressure_mapper,
                     )
                 )
                 self._scheduler.call_soon(process_stroke)
@@ -239,12 +253,13 @@ class KritaReplayer:
         samples: tuple[BrushSample, ...],
         stroke_point_factory: StrokePointFactory,
         float_point_factory: PointFactory,
+        pressure_mapper: PressureMapper = float,
     ) -> list[object]:
         started_at = samples[0].timestamp_ms
         return [
             stroke_point_factory(
                 float_point_factory(sample.x, sample.y),
-                sample.pressure,
+                pressure_mapper(sample.pressure),
                 sample.x_tilt,
                 sample.y_tilt,
                 sample.rotation,
