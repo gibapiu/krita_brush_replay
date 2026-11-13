@@ -9,7 +9,7 @@ from collections import deque
 from datetime import datetime, timezone
 from uuid import uuid4
 
-DIAGNOSTIC_BUILD = "tablet-pressure-capture-v2"
+DIAGNOSTIC_BUILD = "tablet-pressure-capture-v3"
 MAX_LOG_RECORDS = 2_000
 MAX_RECORD_CHARS = 4_000
 

@@ -17,6 +17,8 @@ Krita plugin to record freehand brush strokes and replay the same movement on th
 Recordings stay in memory. Each recording is captured from one document and layer, then can be replayed on the active paint layer.
 
 Replay prefers Krita's native continuous-stroke API when available (Krita 5.4+). 
+Both replay modes use Krita's current global tablet pressure curve and **Use Pen Pressure** setting.
+Recordings retain raw pressure only; input calibration is not saved with strokes.
 Krita 5.3 uses queued tablet events on the canvas, preserving each stroke as one gesture with its pressure, tilt, rotation, and timing. 
 The canvas receives focus before replay and a matching leave event after each stroke.
 
