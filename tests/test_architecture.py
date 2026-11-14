@@ -75,7 +75,7 @@ def test_krita_imports_are_confined_to_infrastructure() -> None:
 def test_core_does_not_import_observability_or_composition() -> None:
     paths = [
         PACKAGE / "runtime.py",
-        PACKAGE / "ui" / "dock.py",
+        *(PACKAGE / "ui").glob("*.py"),
         *(PACKAGE / "infrastructure").glob("*.py"),
         *(PACKAGE / "domain").glob("*.py"),
         *(PACKAGE / "app").glob("*.py"),

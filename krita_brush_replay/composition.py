@@ -1,29 +1,22 @@
+"""Assemble the runtime with logging decorators outside the core layers."""
+
 from __future__ import annotations
 
 from krita_brush_replay.infrastructure.krita_host import KritaHost
-from krita_brush_replay.infrastructure.qt_facade import QtWidgets
+from krita_brush_replay.infrastructure.krita_replay import KritaReplayer
+from krita_brush_replay.observability.capture import ObservedInputFilter
+from krita_brush_replay.observability.replay import ObservedReplayer
 from krita_brush_replay.runtime import BrushReplayRuntime
 
 
-def compose_runtime(panel, application, *, diagnostics: bool = True):
-    if not diagnostics:
-        return panel, BrushReplayRuntime(panel, krita_instance=application)
+def _create_replayer(*args, **kwargs) -> ObservedReplayer:
+    return ObservedReplayer(KritaReplayer(*args, **kwargs))
 
-    from krita_brush_replay.observability.controller import DiagnosticController
 
-    controller = DiagnosticController(application)
-    runtime = BrushReplayRuntime(
+def compose_runtime(panel, application) -> BrushReplayRuntime:
+    return BrushReplayRuntime(
         panel,
         krita_instance=application,
-        host_factory=lambda application: KritaHost(
-            application, replayer_factory=controller.create_replayer
-        ),
-        input_filter_factory=controller.create_input_filter,
-        state_listener=controller.state_changed,
+        host_factory=lambda application: KritaHost(application, replayer_factory=_create_replayer),
+        input_filter_factory=ObservedInputFilter,
     )
-    content = QtWidgets.QWidget()
-    layout = QtWidgets.QVBoxLayout(content)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.addWidget(panel, 1)
-    layout.addWidget(controller.controls)
-    return content, runtime
