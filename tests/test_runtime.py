@@ -83,7 +83,7 @@ def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime._panel = FakePanel()
     runtime._host = FakeHost()
     runtime._application = FakeApplication()
-    runtime._input_filter = object()
+    runtime._input_filter = FakeInputFilter()
     runtime._filter_installed = False
     runtime._mode = ServiceMode.IDLE
     runtime._closed = False
@@ -158,3 +158,20 @@ def test_unavailable_brush_choices_are_reported() -> None:
 
     assert runtime._panel.choices == []
     assert runtime._panel.messages == ["Could not list brush resources: resources locked"]
+
+
+class FakeInputFilter:
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+
+
+def test_detaching_filter_resets_gesture_ownership() -> None:
+    runtime = runtime_without_qt_construction()
+    runtime._set_filter_installed(True)
+
+    runtime._set_filter_installed(False)
+
+    assert runtime._input_filter.resets == 1

@@ -9,12 +9,19 @@ from krita_brush_replay.infrastructure.qt_facade import QtWidgets
 
 
 class BrushReplayRuntime:
-    def __init__(self, panel, *, krita_instance=None) -> None:
+    def __init__(
+        self,
+        panel,
+        *,
+        krita_instance=None,
+        host_factory=KritaHost,
+        input_filter_factory=CanvasInputFilter,
+    ) -> None:
         self._panel = panel
-        self._host = KritaHost(krita_instance)
+        self._host = host_factory(krita_instance)
         self._service = BrushReplayService(self._host)
         self._application = QtWidgets.QApplication.instance()
-        self._input_filter = CanvasInputFilter(
+        self._input_filter = input_filter_factory(
             self._host,
             self._service.accept_input,
             self._service.capture_failed,
@@ -62,6 +69,7 @@ class BrushReplayRuntime:
             self._application.installEventFilter(self._input_filter)
         else:
             self._application.removeEventFilter(self._input_filter)
+            self._input_filter.reset()
         self._filter_installed = installed
 
     def close(self, *_args) -> None:

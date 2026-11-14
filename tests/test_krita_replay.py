@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from dataclasses import replace
 
+import pytest
+
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -195,6 +197,108 @@ def test_continuous_api_receives_all_recorded_input_axes() -> None:
     assert first.speed == 0.4
     assert second.time == 25.0
     assert second.speed == 0.6
+
+
+def test_native_replay_maps_pressure_once_without_changing_the_recording() -> None:
+    node = ContinuousNode()
+    samples = (BrushSample(1.0, 2.0, 0.2, 10), BrushSample(3.0, 4.0, 0.7, 20))
+    session = session_for(samples, samples)
+    provider_calls = []
+
+    def pressure_mapper_provider():
+        provider_calls.append(True)
+        return lambda pressure: pressure * pressure
+
+    replay = replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=ImmediateScheduler(),
+        pressure_mapper_provider=pressure_mapper_provider,
+    )
+    errors = []
+
+    replay.replay(FakeDocument(), node, session, CONTEXT, lambda: None, errors.append)
+
+    assert errors == []
+    assert provider_calls == [True]
+    assert [point.pressure for point in node.polyline_strokes[0]] == pytest.approx([0.04, 0.49])
+    assert [point.pressure for point in node.polyline_strokes[1]] == pytest.approx([0.04, 0.49])
+    assert [sample.pressure for sample in samples] == [0.2, 0.7]
+    assert session.strokes[0].samples is samples
+
+
+def test_replaying_again_uses_the_current_pressure_mapping() -> None:
+    node = ContinuousNode()
+    samples = (BrushSample(1.0, 2.0, 0.4, 0),)
+    session = session_for(samples)
+    current_scale = [1.0]
+
+    def pressure_mapper_provider():
+        scale = current_scale[0]
+        return lambda pressure: pressure * scale
+
+    replay = replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=ImmediateScheduler(),
+        pressure_mapper_provider=pressure_mapper_provider,
+    )
+    errors = []
+
+    replay.replay(FakeDocument(), node, session, CONTEXT, lambda: None, errors.append)
+    current_scale[0] = 2.0
+    replay.replay(FakeDocument(), node, session, CONTEXT, lambda: None, errors.append)
+
+    assert errors == []
+    assert [stroke[0].pressure for stroke in node.polyline_strokes] == [0.4, 0.8]
+    assert samples[0].pressure == 0.4
+
+
+def test_synthetic_replay_keeps_raw_pressure_and_does_not_load_a_mapping() -> None:
+    samples = (BrushSample(1.0, 2.0, 0.2, 10), BrushSample(3.0, 4.0, 0.7, 20))
+    synthetic = FakeSyntheticInput()
+
+    def unexpected_pressure_mapper():
+        pytest.fail("synthetic input must be mapped by Krita")
+
+    errors = []
+    replayer(
+        scheduler=ImmediateScheduler(),
+        synthetic_input=synthetic,
+        pressure_mapper_provider=unexpected_pressure_mapper,
+    ).replay(FakeDocument(), FakeNode(), session_for(samples), CONTEXT, lambda: None, errors.append)
+
+    assert errors == []
+    assert synthetic.strokes[0][1] is samples
+    assert [sample.pressure for sample in synthetic.strokes[0][1]] == [0.2, 0.7]
+
+
+def test_pressure_mapping_failure_stops_native_replay_before_painting() -> None:
+    def unavailable_pressure_mapper():
+        raise RuntimeError("pressure curve unavailable")
+
+    node = ContinuousNode()
+    synthetic = FakeSyntheticInput()
+    errors, completed = [], []
+    replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=ImmediateScheduler(),
+        synthetic_input=synthetic,
+        pressure_mapper_provider=unavailable_pressure_mapper,
+    ).replay(
+        FakeDocument(),
+        node,
+        session_for((BrushSample(1.0, 2.0, 0.5, 0),)),
+        CONTEXT,
+        lambda: completed.append(True),
+        errors.append,
+    )
+
+    assert completed == []
+    assert node.polyline_strokes == []
+    assert synthetic.strokes == []
+    assert [str(error) for error in errors] == ["pressure curve unavailable"]
 
 
 def test_synthetic_fallback_finishes_each_stroke_before_changing_settings() -> None:

@@ -1,71 +1,10 @@
+import pytest
+from input_support import FakeEvent, FakeHost, TabletEvent, UnmarkedMouseEvent, mouse_event
+
 from krita_brush_replay.app.service import BrushReplayService, ServiceMode
 from krita_brush_replay.domain.recording import BrushSample, ContextRef, InputPhase
-from krita_brush_replay.infrastructure.input_filter import (
-    CanvasInputFilter,
-    _event_type,
-    _is_synthesized_mouse,
-    _left_button,
-)
-
-
-class FakePoint:
-    def __init__(self, x: float, y: float) -> None:
-        self._x = x
-        self._y = y
-
-    def x(self) -> float:
-        return self._x
-
-    def y(self) -> float:
-        return self._y
-
-
-class FakeEvent:
-    def __init__(
-        self,
-        event_type,
-        x: float,
-        y: float,
-        timestamp: int,
-    ) -> None:
-        self._event_type = event_type
-        self._point = FakePoint(x, y)
-        self._timestamp = timestamp
-
-    def type(self):
-        return self._event_type
-
-    def button(self):
-        return _left_button()
-
-    def position(self) -> FakePoint:
-        return self._point
-
-    def timestamp(self) -> int:
-        return self._timestamp
-
-
-class FakeHost:
-    def __init__(self, canvas_target) -> None:
-        self.canvas_target = canvas_target
-        self.mapper_calls = 0
-        self.mapped_positions: list[tuple[float, float]] = []
-
-    def is_canvas_target(self, target) -> bool:
-        return target is self.canvas_target
-
-    def capture_mapper(self):
-        self.mapper_calls += 1
-
-        def to_image(position: tuple[float, float]) -> tuple[float, float]:
-            self.mapped_positions.append(position)
-            return position[0] + 10.0, position[1] + 20.0
-
-        return to_image
-
-
-def mouse_event(name: str, x: float, timestamp: int) -> FakeEvent:
-    return FakeEvent(_event_type(name), x, 4.0, timestamp)
+from krita_brush_replay.infrastructure.input_events import event_type, is_synthesized_mouse
+from krita_brush_replay.infrastructure.input_filter import CanvasInputFilter
 
 
 def test_filter_tracks_one_target_and_caches_one_transform_per_stroke() -> None:
@@ -156,15 +95,73 @@ def test_brush_state_capture_failure_stops_recording_with_a_useful_message() -> 
     input_filter.eventFilter(object(), object())
 
     assert service.state.mode is ServiceMode.IDLE
-    assert service.state.message == (
-        "Recording stopped: active brush settings are unavailable"
-    )
+    assert service.state.message == ("Recording stopped: active brush settings are unavailable")
     assert service.session is not None
     assert service.session.strokes == ()
 
 
 def test_synthesized_mouse_event_is_rejected() -> None:
-    event = FakeEvent(_event_type("MouseMove"), 1.0, 2.0, 10)
+    event = FakeEvent(event_type("MouseMove"), 1.0, 2.0, 10)
     event.source = lambda: 1
 
-    assert _is_synthesized_mouse(event)
+    assert is_synthesized_mouse(event)
+
+
+@pytest.mark.parametrize("mouse_release_first", [True, False])
+def test_unmarked_mouse_events_cannot_take_over_a_tablet_stroke(
+    monkeypatch, mouse_release_first
+) -> None:
+    from krita_brush_replay.infrastructure.qt_facade import QtGui
+
+    monkeypatch.setattr(QtGui, "QTabletEvent", TabletEvent)
+    monkeypatch.setattr(QtGui, "QMouseEvent", UnmarkedMouseEvent)
+    canvas = object()
+    host = FakeHost(canvas)
+    captured = []
+    errors = []
+    input_filter = CanvasInputFilter(host, lambda *args: captured.append(args), errors.append)
+
+    def send_mouse(name: str, timestamp: int) -> None:
+        event = UnmarkedMouseEvent(event_type(name), 2.0, 4.0, timestamp)
+        assert not input_filter.eventFilter(canvas, event)
+
+    assert not input_filter.eventFilter(canvas, TabletEvent("TabletPress", 0.2, 10))
+    send_mouse("MouseButtonPress", 11)
+    send_mouse("MouseMove", 12)
+    assert not input_filter.eventFilter(canvas, TabletEvent("TabletMove", 0.5, 20))
+    if mouse_release_first:
+        send_mouse("MouseButtonRelease", 21)
+    assert not input_filter.eventFilter(canvas, TabletEvent("TabletMove", 0.8, 30))
+    assert not input_filter.eventFilter(canvas, TabletEvent("TabletRelease", 0.0, 40))
+    if not mouse_release_first:
+        send_mouse("MouseButtonRelease", 41)
+
+    assert errors == []
+    assert [phase for phase, _sample in captured] == [
+        InputPhase.PRESS,
+        InputPhase.MOVE,
+        InputPhase.MOVE,
+        InputPhase.RELEASE,
+    ]
+    assert [sample.pressure for _phase, sample in captured if sample] == [0.2, 0.5, 0.8]
+    assert host.mapper_calls == 1
+
+    send_mouse("MouseButtonPress", 50)
+    send_mouse("MouseMove", 60)
+    send_mouse("MouseButtonRelease", 70)
+    assert [sample.pressure for _phase, sample in captured[-3:] if sample] == [1.0, 1.0]
+
+
+def test_detaching_capture_clears_tablet_ownership() -> None:
+    canvas = object()
+    captured = []
+    input_filter = CanvasInputFilter(
+        FakeHost(canvas), lambda *args: captured.append(args), lambda error: None
+    )
+    input_filter._handle(TabletEvent("TabletPress", 0.2, 10), canvas, "tablet")
+
+    input_filter.reset()
+    input_filter._handle(mouse_event("MouseButtonPress", 1.0, 20), canvas, "mouse")
+
+    assert captured[-1][0] is InputPhase.PRESS
+    assert captured[-1][1].pressure == 1.0

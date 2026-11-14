@@ -10,25 +10,18 @@ from krita_brush_replay.domain.recording import (
     InputPhase,
     normalized_input_speed,
 )
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, qt_enum
+from krita_brush_replay.infrastructure.input_events import (
+    event_device,
+    event_phase,
+    event_value,
+    is_left_press,
+    is_synthesized_mouse,
+)
+from krita_brush_replay.infrastructure.qt_facade import QtCore
 
 SampleHandler = Callable[[InputPhase, BrushSample | None], None]
 ErrorHandler = Callable[[Exception], None]
 logger = logging.getLogger(__name__)
-
-
-def _event_type(name: str):
-    return qt_enum(QtCore.QEvent, "Type", name)
-
-
-_PHASE_BY_EVENT_TYPE = {
-    _event_type("TabletPress"): InputPhase.PRESS,
-    _event_type("MouseButtonPress"): InputPhase.PRESS,
-    _event_type("TabletMove"): InputPhase.MOVE,
-    _event_type("MouseMove"): InputPhase.MOVE,
-    _event_type("TabletRelease"): InputPhase.RELEASE,
-    _event_type("MouseButtonRelease"): InputPhase.RELEASE,
-}
 
 
 class CanvasInputFilter(QtCore.QObject):
@@ -56,7 +49,7 @@ class CanvasInputFilter(QtCore.QObject):
             self._dispatch(watched, event)
         except Exception as error:
             logger.exception("brush input capture failed")
-            self._reset_stroke()
+            self.reset()
             try:
                 self._error_handler(error)
             except Exception:
@@ -64,17 +57,19 @@ class CanvasInputFilter(QtCore.QObject):
         return False
 
     def _dispatch(self, watched, event) -> None:
-        if isinstance(event, QtGui.QTabletEvent):
-            self._handle(event, watched, "tablet")
-        elif isinstance(event, QtGui.QMouseEvent) and not _is_synthesized_mouse(event):
-            self._handle(event, watched, "mouse")
+        device = event_device(event)
+        if device is None or (device == "mouse" and is_synthesized_mouse(event)):
+            return
+        self._handle(event, watched, device)
 
     def _handle(self, event, watched, device_kind: str) -> None:
-        phase = _input_phase(event)
+        phase = event_phase(event)
         if phase is None:
             return
+        if device_kind == "mouse" and self._device_kind == "tablet":
+            return
         if phase is InputPhase.PRESS:
-            if not _is_left_press(event) or not self._host.is_canvas_target(watched):
+            if not is_left_press(event) or not self._host.is_canvas_target(watched):
                 return
             self._target = watched
             self._device_kind = device_kind
@@ -86,11 +81,11 @@ class CanvasInputFilter(QtCore.QObject):
 
         if phase is InputPhase.RELEASE:
             self._handler(phase, None)
-            self._reset_stroke()
+            self.reset()
             return
 
         position = _event_xy(event)
-        timestamp_ms = max(0, int(_event_value(event, "timestamp", 0)))
+        timestamp_ms = max(0, int(event_value(event, "timestamp", 0)))
         speed = normalized_input_speed(
             self._last_position,
             self._last_timestamp_ms,
@@ -105,37 +100,22 @@ class CanvasInputFilter(QtCore.QObject):
             y=y,
             pressure=_pressure(event, device_kind),
             timestamp_ms=timestamp_ms,
-            x_tilt=float(_event_value(event, "xTilt", 0.0)),
-            y_tilt=float(_event_value(event, "yTilt", 0.0)),
-            rotation=float(_event_value(event, "rotation", 0.0)),
-            tangential_pressure=float(
-                _event_value(event, "tangentialPressure", 0.0)
-            ),
+            x_tilt=float(event_value(event, "xTilt", 0.0)),
+            y_tilt=float(event_value(event, "yTilt", 0.0)),
+            rotation=float(event_value(event, "rotation", 0.0)),
+            tangential_pressure=float(event_value(event, "tangentialPressure", 0.0)),
             speed=speed,
         )
-        self._handler(phase, sample)
         self._last_position = position
         self._last_timestamp_ms = timestamp_ms
+        self._handler(phase, sample)
 
-    def _reset_stroke(self) -> None:
+    def reset(self) -> None:
         self._target = None
         self._device_kind = None
         self._to_image = None
         self._last_position = None
         self._last_timestamp_ms = None
-
-
-def _input_phase(event) -> InputPhase | None:
-    return _PHASE_BY_EVENT_TYPE.get(event.type())
-
-
-def _left_button():
-    return qt_enum(QtCore.Qt, "MouseButton", "LeftButton")
-
-
-def _is_left_press(event) -> bool:
-    button = getattr(event, "button", lambda: None)()
-    return button == _left_button()
 
 
 def _pressure(event, device_kind: str) -> float:
@@ -145,15 +125,6 @@ def _pressure(event, device_kind: str) -> float:
     return min(1.0, max(0.0, float(value)))
 
 
-def _is_synthesized_mouse(event) -> bool:
-    source_getter = getattr(event, "source", None)
-    if not callable(source_getter):
-        return False
-    sources = getattr(QtCore.Qt, "MouseEventSource", QtCore.Qt)
-    not_synthesized = getattr(sources, "MouseEventNotSynthesized", None)
-    return not_synthesized is not None and source_getter() != not_synthesized
-
-
 def _event_xy(event) -> tuple[float, float]:
     for name in ("position", "localPos", "posF", "pos"):
         getter = getattr(event, name, None)
@@ -161,8 +132,3 @@ def _event_xy(event) -> tuple[float, float]:
             point = getter()
             return float(point.x()), float(point.y())
     raise RuntimeError("input event has no position")
-
-
-def _event_value(event, name: str, default):
-    getter = getattr(event, name, None)
-    return getter() if callable(getter) else default

@@ -17,6 +17,8 @@ Krita plugin to record freehand brush strokes and replay the same movement on th
 Recordings stay in memory. Each recording is captured from one document and layer, then can be replayed on the active paint layer.
 
 Replay prefers Krita's native continuous-stroke API when available (Krita 5.4+). 
+Both replay modes use Krita's current global tablet pressure curve and **Use Pen Pressure** setting.
+Recordings retain raw pressure only; input calibration is not saved with strokes.
 Krita 5.3 uses queued tablet events on the canvas, preserving each stroke as one gesture with its pressure, tilt, rotation, and timing. 
 The canvas receives focus before replay and a matching leave event after each stroke.
 
@@ -67,6 +69,23 @@ Replay restores the captured pre-replay settings, and the settings of every pres
 ⚠️ Do not change tools or brush settings while replay is running.
 
 ⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and event timing can produce different pixels.
+
+## Logging
+
+Capture and replay use Python logging under `krita_brush_replay`. Boundary messages use
+`DEBUG`; failures use `ERROR`. Logging adds no docker controls or report collection.
+To inspect activity, configure a handler and level in Krita's Python console:
+
+```python
+import logging
+
+logger = logging.getLogger("krita_brush_replay")
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.DEBUG)
+```
+
+The plugin leaves logger levels and handlers to the host. Instrumentation is wired in
+`composition.py`; the domain, service, and infrastructure do not depend on observability.
 
 ## Test
 
