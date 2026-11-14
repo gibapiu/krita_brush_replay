@@ -31,10 +31,10 @@ def create_dock_widget_class(dock_widget_base: type, application) -> type:
 
             self.setWindowTitle(DOCK_TITLE)
             self._panel = BrushReplayPanel(KritaColorCodec())
-            content, self._runtime = compose_runtime(self._panel, application)
+            self._runtime = compose_runtime(self._panel, application)
             scroll_area = QtWidgets.QScrollArea(self)
             scroll_area.setWidgetResizable(True)
-            scroll_area.setWidget(content)
+            scroll_area.setWidget(self._panel)
             self.setWidget(scroll_area)
 
         def canvasChanged(self, canvas) -> None:

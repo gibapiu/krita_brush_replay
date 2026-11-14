@@ -16,7 +16,6 @@ class BrushReplayRuntime:
         krita_instance=None,
         host_factory=KritaHost,
         input_filter_factory=CanvasInputFilter,
-        state_listener=None,
     ) -> None:
         self._panel = panel
         self._host = host_factory(krita_instance)
@@ -39,10 +38,7 @@ class BrushReplayRuntime:
         panel.override_requested.connect(self._service.override_setting)
         panel.reset_requested.connect(self._service.reset_setting)
         panel.destroyed.connect(self.close)
-        self._state_listener = state_listener
         self._service.subscribe(self._apply_state)
-        if state_listener is not None:
-            self._service.subscribe(state_listener)
 
     def canvas_changed(self) -> None:
         self._host.invalidate_canvas_target()
@@ -82,6 +78,4 @@ class BrushReplayRuntime:
         self._closed = True
         self._host.invalidate_canvas_target()
         self._service.unsubscribe(self._apply_state)
-        if self._state_listener is not None:
-            self._service.unsubscribe(self._state_listener)
         self._set_filter_installed(False)

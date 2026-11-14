@@ -84,7 +84,6 @@ def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime._host = FakeHost()
     runtime._application = FakeApplication()
     runtime._input_filter = FakeInputFilter()
-    runtime._state_listener = None
     runtime._filter_installed = False
     runtime._mode = ServiceMode.IDLE
     runtime._closed = False
@@ -176,12 +175,3 @@ def test_detaching_filter_resets_gesture_ownership() -> None:
     runtime._set_filter_installed(False)
 
     assert runtime._input_filter.resets == 1
-
-
-def test_close_unsubscribes_an_injected_state_listener() -> None:
-    runtime = runtime_without_qt_construction()
-    runtime._state_listener = lambda state: None
-
-    runtime.close()
-
-    assert runtime._service.unsubscribed == [runtime._apply_state, runtime._state_listener]

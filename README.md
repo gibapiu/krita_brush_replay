@@ -70,11 +70,22 @@ Replay restores the captured pre-replay settings, and the settings of every pres
 
 ⚠️ Replay promises the same captured settings, not identical pixels. Random brush engines and event timing can produce different pixels.
 
-## Reporting pressure problems
+## Logging
 
-The optional **Diagnostics** controls below the docker can log to Krita's output and collect
-an exportable bug report independently. See [diagnostics](krita_brush_replay/diagnostics.html)
-for tester instructions and the monitoring switches.
+Capture and replay use Python logging under `krita_brush_replay`. Boundary messages use
+`DEBUG`; failures use `ERROR`. Logging adds no docker controls or report collection.
+To inspect activity, configure a handler and level in Krita's Python console:
+
+```python
+import logging
+
+logger = logging.getLogger("krita_brush_replay")
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.DEBUG)
+```
+
+The plugin leaves logger levels and handlers to the host. Instrumentation is wired in
+`composition.py`; the domain, service, and infrastructure do not depend on observability.
 
 ## Test
 
