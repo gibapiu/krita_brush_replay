@@ -35,12 +35,16 @@ class ObservedReplayer:
             log(logger, logging.ERROR, "replay-failed", error=error)
             on_error(error)
 
-        self._replayer.replay(
-            document,
-            node,
-            session,
-            target,
-            complete,
-            fail,
-            apply_brush_state=apply_brush_state,
-        )
+        try:
+            self._replayer.replay(
+                document,
+                node,
+                session,
+                target,
+                complete,
+                fail,
+                apply_brush_state=apply_brush_state,
+            )
+        except Exception as error:
+            log(logger, logging.ERROR, "replay-failed", error=error)
+            raise

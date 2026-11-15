@@ -91,3 +91,18 @@ def test_core_callback_exceptions_are_not_swallowed() -> None:
 
     with pytest.raises(ValueError, match="callback failed"):
         core.args[4]()
+
+
+def test_synchronous_replay_failure_is_logged_and_propagated(caplog) -> None:
+    class FailingReplayer:
+        def replay(self, *args, **kwargs):
+            raise RuntimeError("no canvas")
+
+    caplog.set_level(logging.ERROR, logger="krita_brush_replay")
+
+    with pytest.raises(RuntimeError, match="no canvas"):
+        ObservedReplayer(FailingReplayer()).replay(
+            None, None, SimpleNamespace(strokes=()), None, None, None,
+        )
+
+    assert caplog.messages == ["replay-failed"]

@@ -1,4 +1,4 @@
-"""Best-effort logging without configuring the host's handlers or levels."""
+"""Best-effort logging: host handler failures never reach capture or replay callbacks."""
 
 from __future__ import annotations
 
@@ -13,12 +13,6 @@ def log(
     error: Exception | None = None,
 ) -> None:
     try:
-        logger.log(
-            level,
-            message,
-            *args,
-            exc_info=(type(error), error, error.__traceback__) if error is not None else None,
-        )
+        logger.log(level, message, *args, exc_info=error)
     except Exception:
-        # A broken host handler must not interrupt capture or replay callbacks.
         pass

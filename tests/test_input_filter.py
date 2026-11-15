@@ -152,6 +152,43 @@ def test_unmarked_mouse_events_cannot_take_over_a_tablet_stroke(
     assert [sample.pressure for _phase, sample in captured[-3:] if sample] == [1.0, 1.0]
 
 
+def test_lost_tablet_release_does_not_block_later_mouse_strokes(monkeypatch) -> None:
+    from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, qt_enum
+
+    monkeypatch.setattr(QtGui, "QTabletEvent", TabletEvent)
+    monkeypatch.setattr(QtGui, "QMouseEvent", UnmarkedMouseEvent)
+    canvas = object()
+    captured = []
+    errors = []
+    input_filter = CanvasInputFilter(
+        FakeHost(canvas), lambda *args: captured.append(args), errors.append
+    )
+    hover = UnmarkedMouseEvent(event_type("MouseMove"), 2.0, 4.0, 30)
+    hover.buttons = lambda: qt_enum(QtCore.Qt, "MouseButton", "NoButton")
+    events = [
+        TabletEvent("TabletPress", 0.4, 10),
+        TabletEvent("TabletMove", 0.6, 20),
+        hover,
+        UnmarkedMouseEvent(event_type("MouseButtonPress"), 3.0, 4.0, 40),
+        UnmarkedMouseEvent(event_type("MouseMove"), 4.0, 4.0, 50),
+        UnmarkedMouseEvent(event_type("MouseButtonRelease"), 5.0, 4.0, 60),
+    ]
+
+    for event in events:
+        input_filter.eventFilter(canvas, event)
+
+    assert errors == []
+    assert [phase for phase, _sample in captured] == [
+        InputPhase.PRESS,
+        InputPhase.MOVE,
+        InputPhase.RELEASE,
+        InputPhase.PRESS,
+        InputPhase.MOVE,
+        InputPhase.RELEASE,
+    ]
+    assert [sample.pressure for _phase, sample in captured if sample] == [0.4, 0.6, 1.0, 1.0]
+
+
 def test_detaching_capture_clears_tablet_ownership() -> None:
     canvas = object()
     captured = []
