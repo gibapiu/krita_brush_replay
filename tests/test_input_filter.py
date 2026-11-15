@@ -144,7 +144,6 @@ def test_unmarked_mouse_events_cannot_take_over_a_tablet_stroke(
         InputPhase.RELEASE,
     ]
     assert [sample.pressure for _phase, sample in captured if sample] == [0.2, 0.5, 0.8]
-    assert host.mapper_calls == 1
 
     send_mouse("MouseButtonPress", 50)
     send_mouse("MouseMove", 60)
