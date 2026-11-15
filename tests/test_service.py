@@ -108,6 +108,18 @@ def test_each_stroke_keeps_the_settings_captured_when_it_started() -> None:
     assert [stroke.brush_state.size for stroke in service.session.strokes] == [10.0, 25.0]
 
 
+def test_stopping_mid_stroke_keeps_the_samples_drawn_so_far() -> None:
+    service = BrushReplayService(FakeHost())
+    service.start_recording()
+    service.accept_input(InputPhase.PRESS, sample(1.0))
+    service.accept_input(InputPhase.MOVE, sample(2.0))
+
+    service.stop_recording()
+
+    assert service.session is not None
+    assert [point.x for point in service.session.strokes[0].samples] == [1.0, 2.0]
+
+
 def test_start_recording_replaces_previous_session() -> None:
     service = BrushReplayService(FakeHost())
     record_one_stroke(service)

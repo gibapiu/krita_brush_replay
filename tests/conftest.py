@@ -52,7 +52,7 @@ if "PyQt5" not in sys.modules and "PyQt6" not in sys.modules:
     qt_core.QEvent = QEvent
     qt_core.QPointF = QPointF
     qt_core.Qt = SimpleNamespace(
-        MouseButton=SimpleNamespace(LeftButton=1),
+        MouseButton=SimpleNamespace(NoButton=0, LeftButton=1),
         MouseEventSource=SimpleNamespace(MouseEventNotSynthesized=0),
     )
     qt_gui.QTabletEvent = type("QTabletEvent", (), {})

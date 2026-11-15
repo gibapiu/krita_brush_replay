@@ -43,6 +43,11 @@ def is_left_press(event) -> bool:
     return event_value(event, "button", None) == left_button()
 
 
+def is_left_held(event) -> bool:
+    buttons = event_value(event, "buttons", None)
+    return buttons is None or bool(buttons & left_button())
+
+
 def is_synthesized_mouse(event) -> bool:
     source = event_value(event, "source", None)
     if source is None:
