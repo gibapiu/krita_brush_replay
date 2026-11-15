@@ -142,6 +142,29 @@ class KritaHost:
             raise RuntimeError("the active canvas input target is unavailable")
         return target
 
+    def watch_history(
+        self,
+        on_undo: Callable[[], None],
+        on_redo: Callable[[], None],
+    ) -> Callable[[], None]:
+        """Follow Krita's undo and redo actions until the returned callback runs."""
+
+        connections = []
+        for name, slot in (("edit_undo", on_undo), ("edit_redo", on_redo)):
+            action = self._krita.action(name)
+            if action is not None:
+                action.triggered.connect(slot)
+                connections.append((action, slot))
+
+        def stop_watching() -> None:
+            for action, slot in connections:
+                try:
+                    action.triggered.disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+
+        return stop_watching
+
     def capture_brush_state(self) -> BrushState:
         view = self._active_view()
         if view is None:

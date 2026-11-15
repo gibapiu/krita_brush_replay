@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum, auto
 from math import hypot
@@ -135,6 +136,37 @@ class RecordingSession:
     @property
     def sample_count(self) -> int:
         return sum(len(stroke.samples) for stroke in self.strokes)
+
+
+class HistoryStep(Enum):
+    """A Krita undo-stack step taken while recording."""
+
+    UNDO = auto()
+    REDO = auto()
+
+
+def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, ...]:
+    """Keep the recorded strokes that remain on the canvas after undo and redo."""
+
+    retained: list[Stroke] = []
+    undone: list[Stroke] = []
+    undone_before_recording = 0
+    for entry in history:
+        if entry is HistoryStep.UNDO:
+            if retained:
+                undone.append(retained.pop())
+            else:
+                undone_before_recording += 1
+        elif entry is HistoryStep.REDO:
+            if undone_before_recording:
+                undone_before_recording -= 1
+            elif undone:
+                retained.append(undone.pop())
+        else:
+            retained.append(entry)
+            undone.clear()
+            undone_before_recording = 0
+    return tuple(retained)
 
 
 def normalized_input_speed(
