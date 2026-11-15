@@ -27,7 +27,8 @@ class BrushReplayRuntime:
             self._service.capture_failed,
             panel,
         )
-        self._filter_installed = False
+        self._capturing = False
+        self._stop_watching_history = None
         self._mode = ServiceMode.IDLE
         self._closed = False
 
@@ -48,7 +49,7 @@ class BrushReplayRuntime:
         if self._closed:
             return
         self._panel.apply_state(state)
-        self._set_filter_installed(state.mode is ServiceMode.RECORDING)
+        self._set_capturing(state.mode is ServiceMode.RECORDING)
         recording_finished = self._mode is ServiceMode.RECORDING and state.can_replay
         self._mode = state.mode
         if recording_finished:
@@ -62,15 +63,22 @@ class BrushReplayRuntime:
             return
         self._panel.set_choices(choices)
 
-    def _set_filter_installed(self, installed: bool) -> None:
-        if self._application is None or installed == self._filter_installed:
+    def _set_capturing(self, capturing: bool) -> None:
+        if capturing == self._capturing:
             return
-        if installed:
-            self._application.installEventFilter(self._input_filter)
+        if capturing:
+            self._stop_watching_history = self._host.watch_history(
+                self._service.undo_triggered,
+                self._service.redo_triggered,
+            )
+            if self._application is not None:
+                self._application.installEventFilter(self._input_filter)
         else:
-            self._application.removeEventFilter(self._input_filter)
+            self._stop_watching_history()
+            if self._application is not None:
+                self._application.removeEventFilter(self._input_filter)
             self._input_filter.reset()
-        self._filter_installed = installed
+        self._capturing = capturing
 
     def close(self, *_args) -> None:
         if self._closed:
@@ -78,4 +86,4 @@ class BrushReplayRuntime:
         self._closed = True
         self._host.invalidate_canvas_target()
         self._service.unsubscribe(self._apply_state)
-        self._set_filter_installed(False)
+        self._set_capturing(False)

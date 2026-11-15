@@ -41,6 +41,15 @@ class FakeHost:
     def __init__(self, choices: BrushChoices | Exception = BrushChoices()) -> None:
         self._choices = choices
         self.invalidations = 0
+        self.watching_history = False
+
+    def watch_history(self, on_undo, on_redo):
+        self.watching_history = True
+
+        def stop_watching() -> None:
+            self.watching_history = False
+
+        return stop_watching
 
     def invalidate_canvas_target(self) -> None:
         self.invalidations += 1
@@ -72,6 +81,12 @@ class FakeService:
         self.unsubscribed = []
         self.canvas_changes = 0
 
+    def undo_triggered(self) -> None:
+        pass
+
+    def redo_triggered(self) -> None:
+        pass
+
     def canvas_changed(self) -> None:
         self.canvas_changes += 1
 
@@ -89,28 +104,32 @@ def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime._host = FakeHost()
     runtime._application = FakeApplication()
     runtime._input_filter = FakeInputFilter()
-    runtime._filter_installed = False
+    runtime._capturing = False
+    runtime._stop_watching_history = None
     runtime._mode = ServiceMode.IDLE
     runtime._closed = False
     runtime._service = FakeService()
     return runtime
 
 
-def test_runtime_installs_filter_only_while_recording() -> None:
+def test_runtime_captures_input_and_undo_history_only_while_recording() -> None:
     runtime = runtime_without_qt_construction()
 
     runtime._apply_state(state(ServiceMode.IDLE))
     runtime._apply_state(state(ServiceMode.RECORDING))
     runtime._apply_state(state(ServiceMode.RECORDING))
+    watching_while_recording = runtime._host.watching_history
     runtime._apply_state(state(ServiceMode.IDLE))
 
     assert runtime._application.installed == [runtime._input_filter]
     assert runtime._application.removed == [runtime._input_filter]
+    assert watching_while_recording
+    assert not runtime._host.watching_history
 
 
 def test_runtime_close_removes_an_installed_filter_once() -> None:
     runtime = runtime_without_qt_construction()
-    runtime._set_filter_installed(True)
+    runtime._set_capturing(True)
 
     runtime.close()
     runtime.close()
