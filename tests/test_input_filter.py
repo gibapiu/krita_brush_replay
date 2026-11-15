@@ -201,3 +201,38 @@ def test_detaching_capture_clears_tablet_ownership() -> None:
 
     assert captured[-1][0] is InputPhase.PRESS
     assert captured[-1][1].pressure == 1.0
+
+
+@pytest.mark.parametrize(
+    ("make_event", "names"),
+    [
+        (TabletEvent, ("TabletPress", "TabletMove", "TabletRelease")),
+        (mouse_event, ("MouseButtonPress", "MouseMove", "MouseButtonRelease")),
+    ],
+)
+def test_shift_drag_brush_resize_is_not_recorded(monkeypatch, make_event, names) -> None:
+    from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, qt_enum
+
+    monkeypatch.setattr(QtGui, "QTabletEvent", TabletEvent)
+    monkeypatch.setattr(QtGui, "QMouseEvent", FakeEvent)
+    canvas = object()
+    captured = []
+    input_filter = CanvasInputFilter(
+        FakeHost(canvas), lambda *args: captured.append(args), lambda error: None
+    )
+
+    def stroke(start: int, modifier: str) -> None:
+        for offset, name in enumerate(names):
+            event = make_event(name, 0.5, start + offset)
+            event.modifiers = lambda: qt_enum(QtCore.Qt, "KeyboardModifier", modifier)
+            input_filter.eventFilter(canvas, event)
+
+    stroke(10, "ShiftModifier")
+    stroke(20, "NoModifier")
+
+    assert [phase for phase, _sample in captured] == [
+        InputPhase.PRESS,
+        InputPhase.MOVE,
+        InputPhase.RELEASE,
+    ]
+    assert [sample.timestamp_ms for _phase, sample in captured if sample] == [20, 21]

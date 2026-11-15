@@ -14,6 +14,7 @@ from krita_brush_replay.infrastructure.input_events import (
     event_device,
     event_phase,
     event_value,
+    is_brush_resize_gesture,
     is_left_held,
     is_left_press,
     is_synthesized_mouse,
@@ -72,7 +73,11 @@ class CanvasInputFilter(QtCore.QObject):
                 self._release()
             return
         if phase is InputPhase.PRESS:
-            if not is_left_press(event) or not self._host.is_canvas_target(watched):
+            if (
+                not is_left_press(event)
+                or is_brush_resize_gesture(event)
+                or not self._host.is_canvas_target(watched)
+            ):
                 return
             self._target = watched
             self._device_kind = device_kind
