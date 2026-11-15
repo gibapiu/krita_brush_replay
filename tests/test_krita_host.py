@@ -404,3 +404,40 @@ def test_current_settings_survive_first_pen_device_initialization() -> None:
     assert settings.applied == [saved_state]
     assert settings.current == saved_state
     assert errors == []
+
+
+class FakeSignal:
+    def __init__(self) -> None:
+        self.slots = []
+
+    def connect(self, slot) -> None:
+        self.slots.append(slot)
+
+    def disconnect(self, slot) -> None:
+        self.slots.remove(slot)
+
+    def emit(self) -> None:
+        for slot in tuple(self.slots):
+            slot()
+
+
+class FakeAction:
+    def __init__(self) -> None:
+        self.triggered = FakeSignal()
+
+
+def test_krita_undo_and_redo_are_followed_until_watching_stops() -> None:
+    krita = FakeKrita(FakeDocument(FakeNode()))
+    actions = {"edit_undo": FakeAction(), "edit_redo": FakeAction()}
+    krita.action = actions.get
+    host = KritaHost(krita)
+    steps = []
+
+    stop_watching = host.watch_history(lambda: steps.append("undo"), lambda: steps.append("redo"))
+    actions["edit_undo"].triggered.emit()
+    actions["edit_redo"].triggered.emit()
+    stop_watching()
+    actions["edit_undo"].triggered.emit()
+
+    assert steps == ["undo", "redo"]
+

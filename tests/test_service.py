@@ -146,6 +146,48 @@ def test_context_change_on_release_discards_the_active_stroke() -> None:
     assert service.session.strokes == ()
 
 
+def draw(service: BrushReplayService, x: float) -> None:
+    service.accept_input(InputPhase.PRESS, sample(x))
+    service.accept_input(InputPhase.RELEASE, None)
+
+
+def test_only_strokes_left_after_undo_and_redo_are_replayed() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    service.start_recording()
+    for x in (1.0, 2.0, 3.0):
+        draw(service, x)
+    service.undo_triggered()
+    service.undo_triggered()
+    service.redo_triggered()
+    service.stop_recording()
+
+    service.replay()
+
+    replayed, _ = host.replayed[0]
+    assert [stroke.samples[0].x for stroke in replayed.strokes] == [1.0, 2.0]
+    assert service.state.stroke_count == 2
+
+
+def test_undo_past_the_recording_start_needs_matching_redos_and_new_strokes_drop_redo() -> None:
+    service = BrushReplayService(FakeHost())
+    service.start_recording()
+    draw(service, 1.0)
+    service.undo_triggered()
+    service.undo_triggered()
+    service.redo_triggered()
+    assert service.state.stroke_count == 0
+    service.redo_triggered()
+    assert service.state.stroke_count == 1
+    service.undo_triggered()
+    draw(service, 2.0)
+    service.redo_triggered()
+    service.stop_recording()
+
+    assert service.session is not None
+    assert [stroke.samples[0].x for stroke in service.session.strokes] == [2.0]
+
+
 def test_move_samples_do_not_query_krita_context() -> None:
     host = FakeHost()
     service = BrushReplayService(host)
