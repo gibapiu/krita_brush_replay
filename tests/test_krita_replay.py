@@ -1,6 +1,8 @@
 from collections.abc import Callable
 from dataclasses import replace
 
+import pytest
+
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -195,6 +197,52 @@ def test_continuous_api_receives_all_recorded_input_axes() -> None:
     assert first.speed == 0.4
     assert second.time == 25.0
     assert second.speed == 0.6
+
+
+def test_synthetic_replay_keeps_raw_pressure_and_does_not_load_a_mapping() -> None:
+    samples = (BrushSample(1.0, 2.0, 0.2, 10), BrushSample(3.0, 4.0, 0.7, 20))
+    synthetic = FakeSyntheticInput()
+
+    def unexpected_pressure_mapper():
+        pytest.fail("synthetic input must be mapped by Krita")
+
+    errors = []
+    replayer(
+        scheduler=ImmediateScheduler(),
+        synthetic_input=synthetic,
+        pressure_mapper_provider=unexpected_pressure_mapper,
+    ).replay(FakeDocument(), FakeNode(), session_for(samples), CONTEXT, lambda: None, errors.append)
+
+    assert errors == []
+    assert synthetic.strokes[0][1] is samples
+
+
+def test_pressure_mapping_failure_stops_native_replay_before_painting() -> None:
+    def unavailable_pressure_mapper():
+        raise RuntimeError("pressure curve unavailable")
+
+    node = ContinuousNode()
+    synthetic = FakeSyntheticInput()
+    errors, completed = [], []
+    replayer(
+        float_point_factory=point_factory,
+        stroke_point_factory=FakeStrokePoint,
+        scheduler=ImmediateScheduler(),
+        synthetic_input=synthetic,
+        pressure_mapper_provider=unavailable_pressure_mapper,
+    ).replay(
+        FakeDocument(),
+        node,
+        session_for((BrushSample(1.0, 2.0, 0.5, 0),)),
+        CONTEXT,
+        lambda: completed.append(True),
+        errors.append,
+    )
+
+    assert completed == []
+    assert node.polyline_strokes == []
+    assert synthetic.strokes == []
+    assert [str(error) for error in errors] == ["pressure curve unavailable"]
 
 
 def test_synthetic_fallback_finishes_each_stroke_before_changing_settings() -> None:
