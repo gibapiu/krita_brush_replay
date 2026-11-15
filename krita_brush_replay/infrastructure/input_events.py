@@ -48,6 +48,12 @@ def is_left_held(event) -> bool:
     return buttons is None or bool(buttons & left_button())
 
 
+def is_brush_resize_gesture(event) -> bool:
+    modifiers = event_value(event, "modifiers", None)
+    shift = qt_enum(QtCore.Qt, "KeyboardModifier", "ShiftModifier")
+    return modifiers is not None and bool(modifiers & shift)
+
+
 def is_synthesized_mouse(event) -> bool:
     source = event_value(event, "source", None)
     if source is None:
