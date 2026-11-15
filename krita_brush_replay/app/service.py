@@ -153,7 +153,10 @@ class BrushReplayService:
 
         if phase is InputPhase.RELEASE:
             if self._active_samples is not None:
-                self._finish_active_stroke()
+                if self._brush_was_resized():
+                    self._discard_active_stroke()
+                else:
+                    self._finish_active_stroke()
                 self._notify()
             return
         if sample is None:
@@ -275,6 +278,11 @@ class BrushReplayService:
             self._record_history(Stroke(tuple(self._active_samples), self._active_brush_state))
         self._discard_active_stroke()
 
+    def _brush_was_resized(self) -> bool:
+        return (
+            self._active_brush_state is not None
+            and self._host.capture_brush_state().size != self._active_brush_state.size
+        )
     def _record_history(self, entry: Stroke | HistoryStep) -> None:
         self._history.append(entry)
         self._strokes = list(retained_strokes(self._history))
