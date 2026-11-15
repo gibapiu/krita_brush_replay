@@ -32,6 +32,11 @@ class FakePanel:
         self.messages.append(message)
 
 
+class FakeInputFilter:
+    def reset(self) -> None:
+        pass
+
+
 class FakeHost:
     def __init__(self, choices: BrushChoices | Exception = BrushChoices()) -> None:
         self._choices = choices
@@ -83,7 +88,7 @@ def runtime_without_qt_construction() -> BrushReplayRuntime:
     runtime._panel = FakePanel()
     runtime._host = FakeHost()
     runtime._application = FakeApplication()
-    runtime._input_filter = object()
+    runtime._input_filter = FakeInputFilter()
     runtime._filter_installed = False
     runtime._mode = ServiceMode.IDLE
     runtime._closed = False

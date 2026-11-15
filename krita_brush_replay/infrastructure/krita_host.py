@@ -11,6 +11,7 @@ from krita_brush_replay.domain.recording import (
     RecordingSession,
 )
 from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
+from krita_brush_replay.infrastructure.krita_pressure import KritaPressureAdapter
 from krita_brush_replay.infrastructure.krita_replay import KritaReplayer, QtScheduler
 from krita_brush_replay.infrastructure.qt_facade import QtCore
 from krita_brush_replay.infrastructure.synthetic_input import (
@@ -22,15 +23,16 @@ from krita_brush_replay.infrastructure.synthetic_input import (
 class KritaHost:
     """Read Krita state, map captured input, and delegate stroke replay."""
 
-    def __init__(self, krita_instance=None) -> None:
+    def __init__(self, krita_instance=None, *, replayer_factory=KritaReplayer) -> None:
         self._krita = krita_instance if krita_instance is not None else _krita_instance()
         self._brush_settings = KritaBrushStateAdapter(self._krita)
         self._canvas_target = None
         scheduler = QtScheduler()
-        self._replayer = KritaReplayer(
+        self._replayer = replayer_factory(
             self.active_context,
             scheduler=scheduler,
             synthetic_input=SyntheticInputReplayer(self.replay_input_target, scheduler),
+            pressure_mapper_provider=KritaPressureAdapter(self._krita).current_mapping,
         )
 
     def active_context(self) -> ContextRef | None:
@@ -99,7 +101,9 @@ class KritaHost:
             or receiver is None
             or _call(receiver, "window") != qwindow
         ):
-            raise RuntimeError("the active canvas input target is unavailable; record a stroke on it first")
+            raise RuntimeError(
+                "the active canvas input target is unavailable; record a stroke on it first"
+            )
         widget_to_image = _widget_to_image_transform(view)
         image_to_widget, invertible = widget_to_image.inverted()
         if not invertible:
