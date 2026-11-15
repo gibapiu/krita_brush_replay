@@ -12,9 +12,11 @@ from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
     ContextRef,
+    HistoryStep,
     InputPhase,
     RecordingSession,
     Stroke,
+    retained_strokes,
 )
 
 
@@ -73,6 +75,7 @@ class BrushReplayService:
         self._host = host
         self._mode = ServiceMode.IDLE
         self._context: ContextRef | None = None
+        self._history: list[Stroke | HistoryStep] = []
         self._strokes: list[Stroke] = []
         self._stroke_settings: list[StrokeSettings] = []
         self._active_samples: list[BrushSample] | None = None
@@ -120,6 +123,7 @@ class BrushReplayService:
             self._set_message("Open a document and select a writable paint layer first.")
             return
         self._context = context
+        self._history.clear()
         self._strokes.clear()
         self._stroke_settings.clear()
         self._discard_active_stroke()
@@ -162,6 +166,21 @@ class BrushReplayService:
             self._notify()
         elif self._active_samples is not None:
             self._active_samples.append(sample)
+
+    def undo_triggered(self) -> None:
+        if self._mode is not ServiceMode.RECORDING:
+            return
+        if self._active_samples is None:
+            self._record_history(HistoryStep.UNDO)
+        else:
+            self._discard_active_stroke()
+        self._notify()
+
+    def redo_triggered(self) -> None:
+        if self._mode is not ServiceMode.RECORDING or self._active_samples is not None:
+            return
+        self._record_history(HistoryStep.REDO)
+        self._notify()
 
     def canvas_changed(self) -> None:
         if self._mode is not ServiceMode.RECORDING:
@@ -253,11 +272,13 @@ class BrushReplayService:
 
     def _finish_active_stroke(self) -> None:
         if self._active_samples and self._active_brush_state is not None:
-            self._strokes.append(
-                Stroke(tuple(self._active_samples), self._active_brush_state)
-            )
-            self._stroke_settings.append(StrokeSettings(self._active_brush_state))
+            self._record_history(Stroke(tuple(self._active_samples), self._active_brush_state))
         self._discard_active_stroke()
+
+    def _record_history(self, entry: Stroke | HistoryStep) -> None:
+        self._history.append(entry)
+        self._strokes = list(retained_strokes(self._history))
+        self._stroke_settings = [StrokeSettings(stroke.brush_state) for stroke in self._strokes]
 
     def _discard_active_stroke(self) -> None:
         self._active_samples = None
