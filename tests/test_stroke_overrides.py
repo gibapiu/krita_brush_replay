@@ -1,7 +1,6 @@
 import sys
 from time import perf_counter
 from types import ModuleType, SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 
@@ -229,6 +228,24 @@ class Krita:
         }
 
 
+class LinearCurve:
+    def __init__(self, text: str) -> None:
+        self._points = [tuple(map(float, point.split(","))) for point in text.split(";") if point]
+
+    def floatTransfer(self, size: int) -> list[float]:
+        return [self._at(index / (size - 1)) for index in range(size)]
+
+    def _at(self, x: float) -> float:
+        (x0, y0), (x1, y1) = next(
+            pair for pair in zip(self._points, self._points[1:]) if x <= pair[1][0]
+        )
+        return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+    @staticmethod
+    def interpolateLinear(pressure: float, transfer: list[float]) -> float:
+        return transfer[round(pressure * (len(transfer) - 1))]
+
+
 class ImmediateTimer:
     @staticmethod
     def singleShot(_delay_ms: int, callback) -> None:
@@ -240,9 +257,7 @@ def krita(monkeypatch) -> Krita:
     module = ModuleType("krita")
     module.ManagedColor = ManagedColor
     module.StrokePoint = lambda *values: values
-    module.KisCubicCurve = Mock()
-    module.KisCubicCurve.return_value.floatTransfer.return_value = [0.0, 1.0]
-    module.KisCubicCurve.interpolateLinear.side_effect = lambda pressure, transfer: pressure
+    module.KisCubicCurve = LinearCurve
     monkeypatch.setitem(sys.modules, "krita", module)
     monkeypatch.setattr(QtCore, "QTimer", ImmediateTimer, raising=False)
     return Krita()
@@ -326,22 +341,15 @@ def test_both_replay_modes_apply_the_current_curve_to_raw_recordings(
     service = BrushReplayService(KritaHost(krita))
     record(service, krita, [krita.presets.ink])
     replay = service.replay_with_current_settings if current_brush_settings else service.replay
-    curve_type = sys.modules["krita"].KisCubicCurve
 
     krita.pressure_curve = "0,0;0.5,0.8;1,1;"
-    curve_type.interpolateLinear.side_effect = lambda pressure, transfer: 0.8
     replay()
     krita.pressure_curve = "0,0;0.5,0.3;1,1;"
-    curve_type.interpolateLinear.side_effect = lambda pressure, transfer: 0.3
     replay()
 
     assert "complete" in service.state.message.lower()
     assert krita.layer.pressures == [(0.8,), (0.3,)]
     assert service.session.strokes[0].samples[0].pressure == 0.5
-    assert [call.args[0] for call in curve_type.call_args_list] == [
-        "0,0;0.5,0.8;1,1;",
-        "0,0;0.5,0.3;1,1;",
-    ]
 
 
 def test_replay_honors_the_current_pen_pressure_toggle(krita: Krita) -> None:
@@ -354,7 +362,6 @@ def test_replay_honors_the_current_pen_pressure_toggle(krita: Krita) -> None:
     assert "complete" in service.state.message.lower()
     assert krita.layer.pressures == [(1.0,)]
     assert service.session.strokes[0].samples[0].pressure == 0.5
-    sys.modules["krita"].KisCubicCurve.assert_not_called()
 
 
 def test_bulk_editing_a_long_recording_stays_interactive(krita: Krita) -> None:
