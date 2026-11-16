@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from time import monotonic
 
@@ -58,7 +58,7 @@ class SyntheticInputReplayer:
     def replay_stroke(
         self,
         target: CanvasInputTarget,
-        samples: tuple[BrushSample, ...],
+        samples: Sequence[BrushSample],
         require_context: Callable[[], None],
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
