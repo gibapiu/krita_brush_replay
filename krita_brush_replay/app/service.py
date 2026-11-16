@@ -275,7 +275,7 @@ class BrushReplayService:
 
     def _finish_active_stroke(self) -> None:
         if self._active_samples and self._active_brush_state is not None:
-            self._record_history(Stroke(tuple(self._active_samples), self._active_brush_state))
+            self._record_history(Stroke(self._active_samples, self._active_brush_state))
         self._discard_active_stroke()
 
     def _brush_was_resized(self) -> bool:

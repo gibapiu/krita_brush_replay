@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from time import monotonic
 from typing import Protocol
 
@@ -35,7 +35,7 @@ class SyntheticStrokeInput(Protocol):
     def replay_stroke(
         self,
         target,
-        samples: tuple[BrushSample, ...],
+        samples: Sequence[BrushSample],
         require_context: Callable[[], None],
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
@@ -250,7 +250,7 @@ class KritaReplayer:
 
     @staticmethod
     def _stroke_points(
-        samples: tuple[BrushSample, ...],
+        samples: Sequence[BrushSample],
         stroke_point_factory: StrokePointFactory,
         float_point_factory: PointFactory,
         pressure_mapper: PressureMapper = float,
