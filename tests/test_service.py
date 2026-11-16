@@ -1,3 +1,4 @@
+import tracemalloc
 from collections.abc import Callable
 
 from krita_brush_replay.app.service import BrushReplayService, ServiceMode
@@ -126,6 +127,29 @@ def test_drag_that_changes_brush_size_is_not_recorded_as_a_stroke() -> None:
         [3.0, 4.0]
     ]
     assert service.session.strokes[0].brush_state.size == 25.0
+
+
+def test_long_recording_keeps_each_sample_small_in_memory() -> None:
+    strokes, samples_per_stroke = 20, 1000
+    service = BrushReplayService(FakeHost())
+    service.start_recording()
+    tracemalloc.start()
+    try:
+        for stroke in range(strokes):
+            service.accept_input(InputPhase.PRESS, sample(stroke))
+            for index in range(1, samples_per_stroke):
+                pressure = index / samples_per_stroke
+                service.accept_input(
+                    InputPhase.MOVE, sample(stroke + pressure, pressure, timestamp_ms=index)
+                )
+            service.accept_input(InputPhase.RELEASE, None)
+        service.stop_recording()
+        retained_bytes, _peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert service.state.sample_count == strokes * samples_per_stroke
+    assert retained_bytes < strokes * samples_per_stroke * 100
 
 
 def test_stopping_mid_stroke_keeps_the_samples_drawn_so_far() -> None:

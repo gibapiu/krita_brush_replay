@@ -142,7 +142,7 @@ class FakeSyntheticInput:
         require_context()
         if before_press is not None:
             before_press()
-        self.strokes.append((target, samples))
+        self.strokes.append((target, tuple(samples)))
         on_complete()
 
 
@@ -214,7 +214,7 @@ def test_synthetic_replay_keeps_raw_pressure_and_does_not_load_a_mapping() -> No
     ).replay(FakeDocument(), FakeNode(), session_for(samples), CONTEXT, lambda: None, errors.append)
 
     assert errors == []
-    assert synthetic.strokes[0][1] is samples
+    assert synthetic.strokes[0][1] == samples
 
 
 def test_pressure_mapping_failure_stops_native_replay_before_painting() -> None:
