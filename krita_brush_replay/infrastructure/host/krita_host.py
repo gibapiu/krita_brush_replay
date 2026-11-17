@@ -1,43 +1,76 @@
-"""Krita context and captured-input adapter."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
+from krita_brush_replay.app.diagnostics import IssueReporter, ignore_issue
 from krita_brush_replay.domain.brush_override import BrushChoices
 from krita_brush_replay.domain.recording import (
     BrushState,
     ContextRef,
     RecordingSession,
 )
-from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
-from krita_brush_replay.infrastructure.krita_pressure import KritaPressureAdapter
-from krita_brush_replay.infrastructure.krita_replay import KritaReplayer, QtScheduler
-from krita_brush_replay.infrastructure.qt_facade import QtCore
-from krita_brush_replay.infrastructure.synthetic_input import (
+from krita_brush_replay.infrastructure.host.krita_brush_state import KritaBrushStateAdapter
+from krita_brush_replay.infrastructure.host.krita_pressure import KritaPressureAdapter
+from krita_brush_replay.infrastructure.host.krita_replay import KritaReplayer, QtScheduler
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore, QtWidgets
+from krita_brush_replay.infrastructure.host.synthetic_input import (
     CanvasInputTarget,
     SyntheticInputReplayer,
 )
 
 
 class KritaHost:
-    """Read Krita state, map captured input, and delegate stroke replay."""
 
-    def __init__(self, krita_instance=None, *, replayer_factory=KritaReplayer) -> None:
+    def __init__(
+        self, krita_instance=None, *, replayer_factory=KritaReplayer,
+        report_issue: IssueReporter = ignore_issue,
+    ) -> None:
         self._krita = krita_instance if krita_instance is not None else _krita_instance()
         self._brush_settings = KritaBrushStateAdapter(self._krita)
-        self._canvas_target = None
         scheduler = QtScheduler()
         self._replayer = replayer_factory(
             self.active_context,
             scheduler=scheduler,
-            synthetic_input=SyntheticInputReplayer(self.replay_input_target, scheduler),
+            synthetic_input=SyntheticInputReplayer(
+                self.replay_input_target, scheduler, report_issue=report_issue
+            ),
             pressure_mapper_provider=KritaPressureAdapter(self._krita).current_mapping,
         )
 
     def active_context(self) -> ContextRef | None:
         target = self._active_target()
         return None if target is None else target[2]
+
+    def active_document_id(self) -> str | None:
+        return _stable_object_id(_call(self._active_document(), "rootNode"))
+
+    def document_path(self, document_id: str) -> str | None:
+        for document in _call(self._krita, "documents") or ():
+            if _stable_object_id(_call(document, "rootNode")) == document_id:
+                return _string_call(document, "fileName") or None
+        return None
+
+    def watch_saves(self, on_saved: Callable[[], None]) -> Callable[[], None]:
+
+        notifier = _call(self._krita, "notifier")
+        saved = getattr(notifier, "imageSaved", None)
+        if saved is None:
+            return lambda: None
+        notifier.setActive(True)
+
+        def document_saved(_file_name) -> None:
+            on_saved()
+
+        saved.connect(document_saved)
+
+        def stop_watching() -> None:
+            try:
+                saved.disconnect(document_saved)
+            except (RuntimeError, TypeError):
+                pass
+
+        return stop_watching
 
     def _active_target(self) -> tuple[object, object, ContextRef] | None:
         document = self._active_document()
@@ -54,17 +87,12 @@ class KritaHost:
         return document, node, ContextRef(document_id, layer_id)
 
     def is_canvas_target(self, target) -> bool:
-        window = _call(self._krita, "activeWindow")
-        qwindow = _call(window, "qwindow")
-        target_window = _call(target, "window")
-        if qwindow is None or target_window != qwindow:
+        qwindow = _call(_call(self._krita, "activeWindow"), "qwindow")
+        if qwindow is None or _call(target, "window") != qwindow:
             return False
         current = target
         while current is not None and current != qwindow:
-            class_name = _qt_class_name(current).lower()
-            object_name = _string_call(current, "objectName").lower()
-            if "canvas" in class_name or "openglwidget" in class_name or object_name == "canvas":
-                self._canvas_target = target
+            if _looks_like_canvas(current):
                 return True
             current = _call(current, "parentWidget")
         return False
@@ -72,7 +100,6 @@ class KritaHost:
     def capture_mapper(
         self,
     ) -> Callable[[tuple[float, float]], tuple[float, float]]:
-        """Return one stable widget-to-image mapper for a captured stroke."""
 
         view = self._active_view()
         if view is None:
@@ -85,25 +112,21 @@ class KritaHost:
 
         return to_image
 
-    def invalidate_canvas_target(self) -> None:
-        self._canvas_target = None
-
     def replay_input_target(self) -> CanvasInputTarget:
-        """Resolve one stable active-canvas receiver and coordinate mapper."""
 
         window = _call(self._krita, "activeWindow")
         qwindow = _call(window, "qwindow")
         view = _call(window, "activeView")
-        receiver = self._canvas_target
+        views = _find_child(qwindow, QtWidgets.QMdiArea)
+        subwindow = _call(views, "activeSubWindow")
+        receiver = _shown_canvas(qwindow if subwindow is None else subwindow)
         if (
             qwindow is None
             or view is None
             or receiver is None
             or _call(receiver, "window") != qwindow
         ):
-            raise RuntimeError(
-                "the active canvas input target is unavailable; record a stroke on it first"
-            )
+            raise RuntimeError("the active canvas input target is unavailable")
         widget_to_image = _widget_to_image_transform(view)
         image_to_widget, invertible = widget_to_image.inverted()
         if not invertible:
@@ -121,7 +144,7 @@ class KritaHost:
             except RuntimeError:
                 return False
             return (
-                self._canvas_target is receiver
+                _call(views, "activeSubWindow") == subwindow
                 and _call(current_window, "qwindow") == qwindow
                 and _call(receiver, "window") == qwindow
                 and current_transform == widget_to_image
@@ -147,7 +170,6 @@ class KritaHost:
         on_undo: Callable[[], None],
         on_redo: Callable[[], None],
     ) -> Callable[[], None]:
-        """Follow Krita's undo and redo actions until the returned callback runs."""
 
         connections = []
         for name, slot in (("edit_undo", on_undo), ("edit_redo", on_redo)):
@@ -210,16 +232,9 @@ class KritaHost:
             if use_original_settings:
                 brush_settings.apply(state)
             elif brush_settings_drifted():
-                # A first synthetic pen hover can load the pen's saved preset.
                 brush_settings.restore()
 
-        finished = False
-
         def finish(error: Exception | None = None) -> None:
-            nonlocal finished
-            if finished:
-                return
-            finished = True
             try:
                 if use_original_settings or brush_settings_drifted():
                     brush_settings.restore()
@@ -249,6 +264,9 @@ class KritaHost:
             )
         except Exception as error:
             finish(error)
+
+    def cancel_replay(self) -> None:
+        self._replayer.cancel()
 
     def _active_document(self):
         return _call(self._krita, "activeDocument")
@@ -287,6 +305,28 @@ def _stable_object_id(source) -> str | None:
 def _qt_class_name(source) -> str:
     meta_object = _call(source, "metaObject")
     return _string_call(meta_object, "className")
+
+
+def _looks_like_canvas(widget) -> bool:
+    class_name = _qt_class_name(widget).lower()
+    object_name = _string_call(widget, "objectName").lower()
+    return "canvas" in class_name or "openglwidget" in class_name or object_name == "canvas"
+
+
+def _shown_canvas(root):
+    find_children = getattr(root, "findChildren", None)
+    widgets = find_children(QtWidgets.QWidget) if callable(find_children) else ()
+    canvases = [
+        widget
+        for widget in widgets
+        if _looks_like_canvas(widget) and _bool_call(widget, "isVisible", False)
+    ]
+    return canvases[-1] if canvases else None
+
+
+def _find_child(root, child_type):
+    find_child = getattr(root, "findChild", None)
+    return find_child(child_type) if callable(find_child) else None
 
 
 def _bool_call(source, name: str, default: bool) -> bool:

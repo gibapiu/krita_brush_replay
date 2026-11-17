@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from krita_brush_replay.domain.recording import InputPhase
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, qt_enum
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore, QtGui, qt_enum
 
 
 def event_type(name: str):

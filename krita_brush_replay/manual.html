@@ -4,32 +4,33 @@
 <body>
 <h1>Brush Replay</h1>
 <p>Record freehand strokes on one paint layer and replay them on the active paint layer.</p>
+<p>Use <strong>Record</strong> for new recordings and the active document's list. In <strong>Replay</strong>, choose any saved recording, including one from a closed document. Search by document or date; select a row and press <strong>Delete</strong> to remove it.</p>
 <p>
   <b>Replay modes:</b>
 </p>
 <ul>
   <li>
-    <strong>Replay</strong> paints on the active layer with the saved preset selection, colours, size, opacity, flow, rotation, pattern, gradient, and blending mode captured at the start of each stroke, including any changes you made to them.
+    <strong>Recorded settings</strong> paints with each stroke's saved settings and your edits.
   </li>
   <li>
-    <strong>Compare with current settings</strong> paints on the active layer with the settings currently selected in Krita and does not change them.
+    <strong>Current settings</strong> paints with the settings currently selected in Krita.
   </li>
 </ul>
 <p>Both replay modes use Krita's current global tablet pressure curve and Use Pen Pressure setting.
 Recordings store raw pressure; input calibration is not saved with strokes.</p>
 <p>
-  Select one or more strokes in the list or press <strong>Select all strokes</strong> to change their settings.
+  Open <strong>Edit strokes</strong>, then select strokes or press <strong>Select all strokes</strong> to change their settings.
   Settings that differ between selected strokes show `—`.
   Press ↺ next to a setting to return the selected strokes to the recorded value. Changed strokes are marked with ✎. 
   Changing a preset keeps the stroke's own size, opacity, flow, rotation, and blending mode unless you change those too.
-  Changes never alter the recording, are discarded when a new recording starts, and are ignored by <strong>Compare with current settings</strong>.
+  Changes preserve the original settings, are saved with the chosen recording, and are ignored by <strong>Current settings</strong>.
 </p>
 <p>
-  <b>⚠️ Limitations</b>
+  <b>⚠️ Limitations ⚠️</b>
 <p>
   <ul>
     <li>Record only one layer. Switching layers or documents will stop current recording and requre a new one</li>
-    <li>Keep recording in memory. A new recording replaces the current one. No history support atm</li>
+    <li>Each document keeps its 10 latest saved recordings. Recordings from documents that were never saved stay in memory and are lost on a document switch.</li>
     <li>Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.</li>
     <li>Replay restores the captured pre-replay settings and the settings of every preset it used, but unsaved preset tweaks may not survive the preset being re-selected.</li>
     <li>Replay promises identical settings, not identical pixels. Random brush engines and event timing can still vary.</li>

@@ -1,11 +1,11 @@
-"""Log accepted gesture boundaries without probing individual input events."""
 
 from __future__ import annotations
 
 import logging
 
 from krita_brush_replay.domain.recording import BrushSample, InputPhase
-from krita_brush_replay.infrastructure.input_filter import CanvasInputFilter
+from krita_brush_replay.infrastructure.host.input_filter import CanvasInputFilter
+from krita_brush_replay.observability.errors import report_issue
 from krita_brush_replay.observability.log import log
 
 logger = logging.getLogger(__name__)
@@ -18,4 +18,8 @@ class ObservedInputFilter(CanvasInputFilter):
                 log(logger, logging.DEBUG, "capture phase=%s", phase.name)
             handler(phase, sample)
 
-        super().__init__(host, accept, error_handler, parent)
+        def fail(error: Exception) -> None:
+            log(logger, logging.ERROR, "capture-failed", error=error)
+            error_handler(error)
+
+        super().__init__(host, accept, fail, parent, report_issue=report_issue)

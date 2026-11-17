@@ -1,16 +1,15 @@
-"""Non-consuming Qt event filter for mouse and tablet brush gestures."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 
+from krita_brush_replay.app.diagnostics import IssueReporter, ignore_issue
 from krita_brush_replay.domain.recording import (
     BrushSample,
     InputPhase,
     normalized_input_speed,
 )
-from krita_brush_replay.infrastructure.input_events import (
+from krita_brush_replay.infrastructure.host.input_events import (
     event_device,
     event_phase,
     event_value,
@@ -19,15 +18,13 @@ from krita_brush_replay.infrastructure.input_events import (
     is_left_press,
     is_synthesized_mouse,
 )
-from krita_brush_replay.infrastructure.qt_facade import QtCore
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore
 
 SampleHandler = Callable[[InputPhase, BrushSample | None], None]
 ErrorHandler = Callable[[Exception], None]
-logger = logging.getLogger(__name__)
 
 
 class CanvasInputFilter(QtCore.QObject):
-    """Observe canvas events without preventing Krita from painting them."""
 
     def __init__(
         self,
@@ -35,11 +32,14 @@ class CanvasInputFilter(QtCore.QObject):
         handler: SampleHandler,
         error_handler: ErrorHandler,
         parent=None,
+        *,
+        report_issue: IssueReporter = ignore_issue,
     ) -> None:
         super().__init__(parent)
         self._host = host
         self._handler = handler
         self._error_handler = error_handler
+        self._report_issue = report_issue
         self._target = None
         self._device_kind: str | None = None
         self._to_image = None
@@ -50,12 +50,11 @@ class CanvasInputFilter(QtCore.QObject):
         try:
             self._dispatch(watched, event)
         except Exception as error:
-            logger.exception("brush input capture failed")
             self.reset()
             try:
                 self._error_handler(error)
-            except Exception:
-                logger.exception("brush input error handler failed")
+            except Exception as callback_error:
+                self._report_issue("capture-error-callback-failed", callback_error)
         return False
 
     def _dispatch(self, watched, event) -> None:

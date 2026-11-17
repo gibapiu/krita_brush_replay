@@ -1,4 +1,3 @@
-"""Immutable data captured for brush-stroke replay."""
 
 from __future__ import annotations
 
@@ -9,13 +8,12 @@ from itertools import starmap
 from math import hypot
 from operator import attrgetter
 from struct import Struct
-from typing import overload
+from typing import TypeVar, overload
 
 DEFAULT_MAX_SPEED_PIXELS_PER_MS = 30.0
 
 
 class InputPhase(Enum):
-    """The part of a freehand input gesture represented by a sample."""
 
     PRESS = auto()
     MOVE = auto()
@@ -24,7 +22,6 @@ class InputPhase(Enum):
 
 @dataclass(frozen=True, slots=True)
 class ContextRef:
-    """Identity of the document and paint layer bound to a recording."""
 
     document_id: str
     layer_id: str
@@ -38,7 +35,6 @@ class ContextRef:
 
 @dataclass(frozen=True, slots=True)
 class ResourceRef:
-    """Stable identity for a Krita resource used by a brush."""
 
     resource_type: str
     name: str
@@ -53,7 +49,6 @@ class ResourceRef:
 
 @dataclass(frozen=True, slots=True)
 class ColorState:
-    """A managed colour represented without retaining a mutable Krita object."""
 
     model: str
     depth: str
@@ -67,7 +62,6 @@ class ColorState:
 
 @dataclass(frozen=True, slots=True)
 class BrushState:
-    """Brush settings that Krita can reliably capture and restore."""
 
     preset: ResourceRef
     foreground: ColorState
@@ -93,11 +87,6 @@ class BrushState:
 
 @dataclass(frozen=True, slots=True)
 class BrushSample:
-    """One input sample in image coordinates.
-
-    Native replay uses every field.
-    Tablet replay carries the input axes and timing so Krita can derive speed from the gesture.
-    """
 
     x: float
     y: float
@@ -127,12 +116,22 @@ _sample_values = attrgetter(*(field.name for field in _SAMPLE_FIELDS))
 
 
 class PackedSamples(Sequence[BrushSample]):
-    """Immutable samples packed into one byte string, so long recordings stay small in memory."""
 
     __slots__ = ("_data",)
 
     def __init__(self, samples: Iterable[BrushSample]) -> None:
         self._data = b"".join(_SAMPLE_LAYOUT.pack(*_sample_values(sample)) for sample in samples)
+
+    @classmethod
+    def from_bytes(cls, data: bytes) -> PackedSamples:
+        if len(data) % _SAMPLE_LAYOUT.size:
+            raise ValueError("packed samples are incomplete")
+        samples = cls(())
+        samples._data = bytes(data)
+        return samples
+
+    def __bytes__(self) -> bytes:
+        return self._data
 
     def __len__(self) -> int:
         return len(self._data) // _SAMPLE_LAYOUT.size
@@ -167,15 +166,19 @@ class PackedSamples(Sequence[BrushSample]):
         return tuple(_SAMPLE_LAYOUT.iter_unpack(self._data))
 
 
+class StoredSamples(Sequence[BrushSample]):
+
+    __slots__ = ()
+
+
 @dataclass(frozen=True, slots=True)
 class Stroke:
-    """A complete freehand input gesture."""
 
     samples: Sequence[BrushSample]
     brush_state: BrushState
 
     def __post_init__(self) -> None:
-        if not isinstance(self.samples, PackedSamples):
+        if not isinstance(self.samples, (PackedSamples, StoredSamples)):
             object.__setattr__(self, "samples", PackedSamples(self.samples))
         if not self.samples:
             raise ValueError("a stroke must contain at least one sample")
@@ -183,7 +186,6 @@ class Stroke:
 
 @dataclass(frozen=True, slots=True)
 class RecordingSession:
-    """All strokes and the document and layer where they were recorded."""
 
     origin: ContextRef
     strokes: tuple[Stroke, ...]
@@ -194,17 +196,30 @@ class RecordingSession:
 
 
 class HistoryStep(Enum):
-    """A Krita undo-stack step taken while recording."""
 
     UNDO = auto()
     REDO = auto()
 
 
-def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, ...]:
-    """Keep the recorded strokes that remain on the canvas after undo and redo."""
+Entry = TypeVar("Entry")
 
-    retained: list[Stroke] = []
-    undone: list[Stroke] = []
+
+def retained_strokes(history: Iterable[Entry | HistoryStep]) -> tuple[Entry, ...]:
+
+    retained, _undone, _undone_before_recording = _replayed(history)
+    return tuple(retained)
+
+
+def compacted_history(history: Iterable[Entry | HistoryStep]) -> list[Entry | HistoryStep]:
+
+    retained, undone, undone_before_recording = _replayed(history)
+    undo_steps = [HistoryStep.UNDO] * (len(undone) + undone_before_recording)
+    return [*retained, *reversed(undone), *undo_steps]
+
+
+def _replayed(history: Iterable[Entry | HistoryStep]) -> tuple[list[Entry], list[Entry], int]:
+    retained: list[Entry] = []
+    undone: list[Entry] = []
     undone_before_recording = 0
     for entry in history:
         if entry is HistoryStep.UNDO:
@@ -221,7 +236,7 @@ def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, .
             retained.append(entry)
             undone.clear()
             undone_before_recording = 0
-    return tuple(retained)
+    return retained, undone, undone_before_recording
 
 
 def normalized_input_speed(
@@ -232,7 +247,6 @@ def normalized_input_speed(
     *,
     max_speed_pixels_per_ms: float = DEFAULT_MAX_SPEED_PIXELS_PER_MS,
 ) -> float:
-    """Estimate Krita's normalized speed sensor from consecutive view samples."""
 
     if previous_position is None or previous_timestamp_ms is None:
         return 0.0

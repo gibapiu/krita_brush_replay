@@ -1,22 +1,17 @@
-"""Queued tablet gestures for Krita versions without native stroke replay."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from time import monotonic
 
+from krita_brush_replay.app.diagnostics import IssueReporter, ignore_issue
 from krita_brush_replay.domain.recording import BrushSample, InputPhase
-from krita_brush_replay.infrastructure.krita_replay import Scheduler
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui
-
-logger = logging.getLogger(__name__)
-
+from krita_brush_replay.infrastructure.host.krita_replay import Scheduler
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore, QtGui
 
 @dataclass(frozen=True, slots=True)
 class CanvasInputTarget:
-    """One canvas receiver with a stable image-to-widget mapping."""
 
     receiver: object
     to_widget: Callable[[tuple[float, float]], tuple[float, float]]
@@ -31,7 +26,6 @@ def _require_gui_thread() -> None:
 
 
 class SyntheticInputReplayer:
-    """Replay on the GUI thread, yielding after every posted input event."""
 
     def __init__(
         self,
@@ -40,11 +34,13 @@ class SyntheticInputReplayer:
         *,
         event_factory: QtInputEventFactory | None = None,
         event_poster: QtEventPoster | None = None,
+        report_issue: IssueReporter = ignore_issue,
     ) -> None:
         self._target_provider = target_provider
         self._scheduler = scheduler
         self._event_factory = event_factory if event_factory is not None else QtInputEventFactory()
         self._event_poster = event_poster
+        self._report_issue = report_issue
 
     def prepare(self) -> CanvasInputTarget:
         _require_gui_thread()
@@ -52,7 +48,7 @@ class SyntheticInputReplayer:
         if not target.is_valid():
             raise RuntimeError("the active canvas changed before replay")
         if self._event_poster is None:
-            self._event_poster = QtEventPoster()
+            self._event_poster = QtEventPoster(report_issue=self._report_issue)
         return target
 
     def replay_stroke(
@@ -93,8 +89,7 @@ class SyntheticInputReplayer:
                     on_error(error)
 
             def cleanup_failed(cleanup_error: Exception) -> None:
-                logger.debug("canvas input cleanup failed", exc_info=cleanup_error)
-                # A deleted receiver cannot consume cleanup events.
+                self._report_issue("synthetic-cleanup-failed", cleanup_error)
                 on_error(error if error is not None else cleanup_error)
 
             def leave() -> None:
@@ -108,10 +103,13 @@ class SyntheticInputReplayer:
                 except Exception as cleanup_error:
                     cleanup_failed(cleanup_error)
 
+            def release_failed(cleanup_error: Exception) -> None:
+                self._report_issue("synthetic-release-failed", cleanup_error)
+                leave()
+
             try:
                 if pressed:
                     pressed = False
-                    # Release the original receiver even if the active context changed.
                     poster.post(
                         target.receiver,
                         factory.create(
@@ -122,12 +120,12 @@ class SyntheticInputReplayer:
                             int(monotonic() * 1000),
                         ),
                         leave,
-                        lambda cleanup_error: leave(),
+                        release_failed,
                     )
                 else:
                     leave()
-            except Exception:
-                leave()
+            except Exception as cleanup_error:
+                release_failed(cleanup_error)
 
         def delivered(phase: InputPhase) -> None:
             nonlocal index
@@ -136,7 +134,6 @@ class SyntheticInputReplayer:
                 return
             if index + 1 < len(samples):
                 index += 1
-                # Absolute deadlines avoid adding event delivery time to every sample.
                 deadline_ms = started_ms + max(0, samples[index].timestamp_ms - source_ms)
                 delay_ms = max(0, deadline_ms - int(monotonic() * 1000))
                 self._scheduler.call_later(delay_ms, lambda: emit(InputPhase.MOVE))
@@ -183,14 +180,12 @@ class SyntheticInputReplayer:
             except Exception as error:
                 finish(error)
 
-        def hover() -> None:
+        def initialize_pen_device() -> None:
             try:
                 require_context()
                 if not target.is_valid():
                     raise RuntimeError("the active canvas changed during replay")
                 sample = samples[0]
-                # The first pen event switches Krita's tool/device. Do that without
-                # a pressed button, before applying settings or starting the stroke.
                 event = factory.hover(
                     target.receiver,
                     target.to_widget((sample.x, sample.y)),
@@ -207,13 +202,11 @@ class SyntheticInputReplayer:
                 require_context()
                 if not target.is_valid():
                     raise RuntimeError("the active canvas changed during replay")
-                # Focus only after the Replay button's mouse handler has returned.
                 target.focus()
                 position = target.to_widget((samples[0].x, samples[0].y))
-                # Krita ignores presses until its shortcut matcher sees a canvas enter.
                 event = factory.enter(target.receiver, position)
                 entered = True
-                post(event, hover)
+                post(event, initialize_pen_device)
             except Exception as error:
                 finish(error)
 
@@ -222,18 +215,19 @@ class SyntheticInputReplayer:
 
 class _DeliveryEvent(QtCore.QEvent):
     def __init__(self, callback, on_error) -> None:
-        # This event goes only to our private receiver; no global type registration is needed.
         super().__init__(_qt_value(QtCore.QEvent, "Type", "User"))
         self.callback = callback
         self.on_error = on_error
 
 
 class QtEventPoster(QtCore.QObject):
-    """Acknowledge input after Qt returns from delivery, without nested event loops."""
+
+    def __init__(self, *, report_issue: IssueReporter = ignore_issue) -> None:
+        super().__init__()
+        self._report_issue = report_issue
 
     def post(self, receiver, event, on_delivered, on_error) -> None:
         QtCore.QCoreApplication.postEvent(receiver, event)
-        # Equal-priority posted events are FIFO on the same GUI thread.
         QtCore.QCoreApplication.postEvent(self, _DeliveryEvent(on_delivered, on_error))
 
     def event(self, event) -> bool:
@@ -242,15 +236,15 @@ class QtEventPoster(QtCore.QObject):
         try:
             event.callback()
         except Exception as error:
+            self._report_issue("event-delivery-callback-failed", error)
             try:
                 event.on_error(error)
-            except Exception:
-                logger.exception("canvas replay callback failed")
+            except Exception as callback_error:
+                self._report_issue("event-delivery-error-callback-failed", callback_error)
         return True
 
 
 class QtInputEventFactory:
-    """Construct tablet input using Krita's loaded Qt binding and existing device."""
 
     @staticmethod
     def enter(receiver, position: tuple[float, float]):
@@ -333,7 +327,6 @@ class QtInputEventFactory:
                 button,
                 buttons,
             )
-        # Some Qt 6 Python bindings omit this setter; scheduling still preserves timing.
         set_timestamp = getattr(event, "setTimestamp", None)
         if callable(set_timestamp):
             set_timestamp(timestamp_ms & 0xFFFFFFFF)

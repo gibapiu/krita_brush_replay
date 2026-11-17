@@ -18,7 +18,7 @@ class FakeKritaApi:
         self.registration = (application, identifier, dock_type)
 
 
-def test_register_plugin_registers_lazy_dock_without_importing_qt() -> None:
+def test_plugin_registers_its_docker_with_the_requested_application() -> None:
     application = object()
     api = FakeKritaApi()
 

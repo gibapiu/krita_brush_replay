@@ -9,7 +9,7 @@ from krita_brush_replay.domain.brush_override import (
     StrokeSettings,
 )
 from krita_brush_replay.domain.recording import ColorState, ResourceRef
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, QtWidgets, qt_enum
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore, QtGui, QtWidgets, qt_enum
 
 RESET_SYMBOL = "↺"
 MIXED_VALUES_TEXT = "—"

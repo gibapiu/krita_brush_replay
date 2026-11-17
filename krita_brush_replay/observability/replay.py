@@ -1,4 +1,3 @@
-"""Log replay boundaries while preserving core objects and callback semantics."""
 
 from __future__ import annotations
 
@@ -13,6 +12,9 @@ logger = logging.getLogger(__name__)
 class ObservedReplayer:
     def __init__(self, replayer) -> None:
         self._replayer = replayer
+
+    def cancel(self) -> None:
+        self._replayer.cancel()
 
     def replay(
         self,

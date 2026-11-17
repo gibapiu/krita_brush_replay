@@ -1,4 +1,3 @@
-"""Qt binding already loaded by Krita."""
 
 import sys
 

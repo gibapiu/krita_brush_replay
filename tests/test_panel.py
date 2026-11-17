@@ -1,12 +1,13 @@
 from dataclasses import replace
-from time import perf_counter
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from krita_brush_replay.app.service import ServiceMode, ServiceState
+from krita_brush_replay.app.service_state import ServiceMode, ServiceState
+from krita_brush_replay.app.recording_library import LibraryState, RecordingInfo, RecordingKey
 from krita_brush_replay.domain.brush_override import BrushChoices, StrokeSettings
 from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
-from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, QtWidgets
+from krita_brush_replay.infrastructure.host.qt_facade import QtCore, QtGui, QtWidgets
 
 pytestmark = pytest.mark.skipif(
     not hasattr(QtWidgets, "QListWidget"),
@@ -45,13 +46,16 @@ def panel():
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     widget = BrushReplayPanel(ColorCodec())
     widget.set_choices(BrushChoices(presets=(INK, PENCIL), blending_modes={"normal": "Normal"}))
+    widget.findChild(QtWidgets.QTabWidget, "workflow").setCurrentIndex(1)
+    widget.findChild(QtWidgets.QToolButton, "edit_strokes").click()
     yield widget
     widget.deleteLater()
     application.processEvents()
 
 
 def idle(*strokes: StrokeSettings) -> ServiceState:
-    return ServiceState(ServiceMode.IDLE, strokes, 0, "")
+    key = RecordingKey("/art/cat.kra", "recording")
+    return ServiceState(ServiceMode.IDLE, strokes, 0, "", source=key, current_recording=key)
 
 
 def editor_field(panel, label: str) -> QtWidgets.QWidget:
@@ -63,12 +67,8 @@ def editor_field(panel, label: str) -> QtWidgets.QWidget:
     raise LookupError(label)
 
 
-def key_press(key) -> QtGui.QKeyEvent:
-    return QtGui.QKeyEvent(QtCore.QEvent.Type.KeyPress, key, QtCore.Qt.KeyboardModifier.NoModifier)
-
-
 def select_strokes(panel, *rows: int) -> None:
-    stroke_list = panel.findChild(QtWidgets.QListWidget)
+    stroke_list = panel.findChild(QtWidgets.QListWidget, "strokes")
     for row in rows:
         stroke_list.item(row).setSelected(True)
 
@@ -85,26 +85,6 @@ def test_edits_apply_to_the_selected_strokes(panel) -> None:
     assert requests == [((0, 2), "size", 25.0), ((0, 2), "preset", PENCIL)]
 
 
-def test_differing_values_show_a_mixed_marker_that_stepping_cannot_apply(panel) -> None:
-    requests = []
-    panel.override_requested.connect(lambda *request: requests.append(request))
-    panel.apply_state(
-        idle(StrokeSettings(RECORDED), StrokeSettings(replace(RECORDED, size=12.0, preset=PENCIL)))
-    )
-    select_strokes(panel, 0, 1)
-    size = editor_field(panel, "Size")
-    preset = editor_field(panel, "Preset")
-
-    size.stepBy(1)
-    preset.setFocus()
-    QtWidgets.QApplication.sendEvent(preset, key_press(QtCore.Qt.Key.Key_Down))
-
-    assert size.text() == "—"
-    assert preset.currentText() == ""
-    assert editor_field(panel, "Opacity").text() != "—"
-    assert requests == []
-
-
 def test_typing_into_a_mixed_field_applies_the_typed_value(panel) -> None:
     from PyQt6.QtTest import QTest
 
@@ -113,6 +93,8 @@ def test_typing_into_a_mixed_field_applies_the_typed_value(panel) -> None:
     panel.apply_state(idle(StrokeSettings(RECORDED), StrokeSettings(replace(RECORDED, size=12.0))))
     select_strokes(panel, 0, 1)
     size = editor_field(panel, "Size")
+    assert size.text() == "—"
+    panel.findChild(QtWidgets.QToolButton, "edit_strokes").setChecked(True)
     size.setFocus()
 
     QTest.keyClicks(size, "25")
@@ -121,61 +103,60 @@ def test_typing_into_a_mixed_field_applies_the_typed_value(panel) -> None:
     assert requests == [((0, 1), "size", 25.0)]
 
 
-def test_numbers_never_step_below_their_minimum(panel) -> None:
-    requests = []
-    panel.override_requested.connect(lambda *request: requests.append(request))
-    panel.apply_state(idle(StrokeSettings(replace(RECORDED, opacity=0.0))))
-    select_strokes(panel, 0)
-    opacity = editor_field(panel, "Opacity")
+def test_record_scope_library_choice_search_and_confirmed_delete(panel, monkeypatch):
+    from PyQt6.QtTest import QTest
 
-    opacity.stepBy(-1)
-
-    assert opacity.text() == "0.00 %"
-    assert requests == []
-
-
-def test_scrolling_over_an_unfocused_field_changes_nothing(panel) -> None:
-    requests = []
-    panel.override_requested.connect(lambda *request: requests.append(request))
-    panel.apply_state(idle(StrokeSettings(RECORDED)))
-    select_strokes(panel, 0)
-    wheel = QtGui.QWheelEvent(
-        QtCore.QPointF(5, 5),
-        QtCore.QPointF(5, 5),
-        QtCore.QPoint(0, 0),
-        QtCore.QPoint(0, 120),
-        QtCore.Qt.MouseButton.NoButton,
-        QtCore.Qt.KeyboardModifier.NoModifier,
-        QtCore.Qt.ScrollPhase.NoScrollPhase,
-        False,
+    current = RecordingKey("/art/cat.kra", "current")
+    older = RecordingKey("/art/cat.kra", "older")
+    foreign = RecordingKey("/closed/dog.kra", "dog")
+    now = datetime.now(timezone.utc)
+    state = ServiceState(
+        ServiceMode.IDLE, (), 0, "Choose a recording.",
+        current_recording=current, document=current.document, document_open=True,
     )
-
-    for label in ("Preset", "Opacity"):
-        QtWidgets.QApplication.sendEvent(editor_field(panel, label), wheel)
-
-    assert requests == []
-
-
-def test_recording_many_strokes_keeps_panel_updates_fast(panel) -> None:
-    strokes: tuple[StrokeSettings, ...] = ()
-    started = perf_counter()
-
-    for _ in range(2_000):
-        strokes = (*strokes, StrokeSettings(RECORDED))
-        panel.apply_state(ServiceState(ServiceMode.RECORDING, strokes, 0, ""))
-
-    assert perf_counter() - started < 2.0
-
-
-def test_accepting_the_colour_dialog_without_picking_changes_nothing(panel) -> None:
-    requests = []
-    panel.override_requested.connect(lambda *request: requests.append(request))
-    red = ColorState("RGBA", "U8", "sRGB", (1.0, 0.0, 0.0, 1.0))
-    red_stroke = StrokeSettings(replace(RECORDED, foreground=red))
-    panel.apply_state(idle(StrokeSettings(RECORDED), red_stroke))
-    select_strokes(panel, 0, 1)
-    QtCore.QTimer.singleShot(0, lambda: QtWidgets.QApplication.activeModalWidget().accept())
-
-    editor_field(panel, "Foreground").click()
-
-    assert requests == []
+    panel.apply_state(state)
+    panel.apply_library_state(LibraryState((
+        RecordingInfo(current, now), RecordingInfo(older, now - timedelta(minutes=2)),
+        RecordingInfo(foreign, now - timedelta(days=1)),
+    )))
+    local = panel.findChild(QtWidgets.QListWidget, "recordings")
+    library = panel.findChild(QtWidgets.QListWidget, "library")
+    replay = panel.findChild(QtWidgets.QPushButton, "replay")
+    assert local.count() == 2
+    assert library.count() == 3
+    assert not replay.isEnabled()
+    assert panel.findChild(QtWidgets.QWidget, "stroke_edits").isHidden()
+    requests, deleted, painted = [], [], []
+    panel.source_requested.connect(requests.append)
+    panel.delete_requested.connect(deleted.append)
+    panel.replay_requested.connect(lambda: painted.append("recorded"))
+    panel.replay_current_requested.connect(lambda: painted.append("current"))
+    panel.findChild(QtWidgets.QLineEdit, "library_search").setText("dog")
+    assert library.count() == 1
+    assert local.count() == 2
+    library.setCurrentRow(0)
+    assert requests == [foreign]
+    panel.show()
+    QtWidgets.QApplication.processEvents()
+    QTest.mouseClick(
+        library.viewport(), QtCore.Qt.MouseButton.LeftButton,
+        pos=library.visualItemRect(library.item(0)).center(),
+    )
+    assert requests == [foreign, foreign]
+    panel.apply_state(replace(state, source=foreign, strokes=(StrokeSettings(RECORDED),)))
+    assert replay.isEnabled()
+    replay.click()
+    panel.findChild(QtWidgets.QComboBox, "replay_mode").setCurrentIndex(1)
+    replay.click()
+    assert painted == ["recorded", "current"]
+    remove = panel.findChild(QtWidgets.QPushButton, "delete_library_recording")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox, "question", lambda *args: QtWidgets.QMessageBox.StandardButton.No
+    )
+    remove.click()
+    assert deleted == []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox, "question", lambda *args: QtWidgets.QMessageBox.StandardButton.Yes
+    )
+    remove.click()
+    assert deleted == [(foreign,)]

@@ -1,4 +1,3 @@
-"""Capture and restore the brush settings exposed by Krita's public API."""
 
 from __future__ import annotations
 
@@ -58,7 +57,6 @@ class KritaColorCodec:
 
 
 class KritaBrushStateAdapter:
-    """Translate between immutable brush state and a live Krita view."""
 
     def __init__(self, krita_instance, color_factory: ColorFactory | None = None) -> None:
         self._krita = krita_instance

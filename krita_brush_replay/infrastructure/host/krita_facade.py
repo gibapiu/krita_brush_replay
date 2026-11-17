@@ -1,4 +1,3 @@
-"""Krita 5/6 plugin-registration compatibility boundary."""
 
 from __future__ import annotations
 

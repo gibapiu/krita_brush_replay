@@ -1,8 +1,9 @@
-"""Capability-aware Krita stroke replay."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from enum import Enum, auto
 from time import monotonic
 from typing import Protocol
 
@@ -49,13 +50,40 @@ class QtScheduler:
         self.call_later(0, callback)
 
     def call_later(self, delay_ms: int, callback: Callable[[], None]) -> None:
-        from krita_brush_replay.infrastructure.qt_facade import QtCore
+        from krita_brush_replay.infrastructure.host.qt_facade import QtCore
 
         QtCore.QTimer.singleShot(delay_ms, callback)
 
 
+class _RunState(Enum):
+    RUNNING = auto()
+    CANCELLED = auto()
+    FINISHED = auto()
+
+
+@dataclass
+class _ReplayRun:
+    context: ContextProvider
+    target: ContextRef
+    state: _RunState = _RunState.RUNNING
+
+    def cancel(self) -> None:
+        if self.state is _RunState.RUNNING:
+            self.state = _RunState.CANCELLED
+
+    def require(self, suffix: str) -> None:
+        if self.state is not _RunState.RUNNING:
+            raise RuntimeError("Replay cancelled.")
+        if self.context() != self.target:
+            raise RuntimeError(f"the active document or layer changed {suffix}")
+
+    def finish(self, callback, *args) -> None:
+        if self.state is not _RunState.FINISHED:
+            self.state = _RunState.FINISHED
+            callback(*args)
+
+
 class KritaReplayer:
-    """Submit complete recorded strokes through the best available Krita API."""
 
     def __init__(
         self,
@@ -73,6 +101,7 @@ class KritaReplayer:
         self._scheduler = scheduler if scheduler is not None else QtScheduler()
         self._synthetic_input = synthetic_input
         self._pressure_mapper_provider = pressure_mapper_provider
+        self._active: _ReplayRun | None = None
 
     def replay(
         self,
@@ -85,38 +114,59 @@ class KritaReplayer:
         *,
         apply_brush_state: BrushStateApplier | None = None,
     ) -> None:
-        continuous_api = self._continuous_replay_api(node)
-        if continuous_api is not None:
-            method, stroke_point_factory, float_point_factory = continuous_api
-            self._replay_continuous(
-                document,
-                session,
-                target,
-                method,
-                stroke_point_factory,
-                float_point_factory,
-                on_complete,
-                on_error,
-                apply_brush_state,
-            )
-            return
-        if self._synthetic_input is not None:
-            self._replay_synthetic(
-                document,
-                session,
-                target,
-                on_complete,
-                on_error,
-                apply_brush_state,
-            )
-            return
-        on_error(RuntimeError("Krita provides no continuous stroke replay capability"))
+        run = _ReplayRun(self._context_provider, target)
+        self._active = run
+
+        def finish(callback, *args) -> None:
+            if self._active is run:
+                self._active = None
+            run.finish(callback, *args)
+
+        def complete() -> None:
+            finish(on_complete)
+
+        def fail(error: Exception) -> None:
+            finish(on_error, error)
+
+        try:
+            continuous_api = self._continuous_replay_api(node)
+            if continuous_api is not None:
+                method, stroke_point_factory, float_point_factory = continuous_api
+                self._replay_continuous(
+                    document,
+                    session,
+                    run,
+                    method,
+                    stroke_point_factory,
+                    float_point_factory,
+                    complete,
+                    fail,
+                    apply_brush_state,
+                )
+                return
+            if self._synthetic_input is not None:
+                self._replay_synthetic(
+                    document,
+                    session,
+                    run,
+                    complete,
+                    fail,
+                    apply_brush_state,
+                )
+                return
+            raise RuntimeError("Krita provides no continuous stroke replay capability")
+        except Exception as error:
+            fail(error)
+
+    def cancel(self) -> None:
+        if self._active is not None:
+            self._active.cancel()
 
     def _replay_synthetic(
         self,
         document,
         session: RecordingSession,
-        target: ContextRef,
+        run: _ReplayRun,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
         apply_brush_state: BrushStateApplier | None,
@@ -133,7 +183,7 @@ class KritaReplayer:
 
         def process_stroke() -> None:
             try:
-                self._require_context(target, "during replay")
+                run.require("during replay")
                 try:
                     stroke = next(strokes)
                 except StopIteration:
@@ -148,10 +198,10 @@ class KritaReplayer:
                 synthetic_input.replay_stroke(
                     canvas_target,
                     stroke.samples,
-                    lambda: self._require_context(target, "during replay"),
+                    lambda: run.require("during replay"),
                     lambda: self._wait_for_replay(
                         document,
-                        target,
+                        run,
                         process_stroke,
                         on_error,
                     ),
@@ -171,7 +221,7 @@ class KritaReplayer:
         self,
         document,
         session: RecordingSession,
-        target: ContextRef,
+        run: _ReplayRun,
         method,
         stroke_point_factory: StrokePointFactory,
         float_point_factory: PointFactory,
@@ -192,7 +242,7 @@ class KritaReplayer:
 
         def submit_stroke(stroke) -> None:
             try:
-                self._require_context(target, "during replay")
+                run.require("during replay")
                 method(
                     self._stroke_points(
                         stroke.samples,
@@ -207,13 +257,13 @@ class KritaReplayer:
 
         def process_stroke() -> None:
             try:
-                self._require_context(target, "during replay")
+                run.require("during replay")
                 try:
                     stroke = next(strokes)
                 except StopIteration:
                     self._wait_for_replay(
                         document,
-                        target,
+                        run,
                         on_complete,
                         on_error,
                     )
@@ -243,7 +293,7 @@ class KritaReplayer:
 
         float_point_factory = self._float_point_factory
         if float_point_factory is None:
-            from krita_brush_replay.infrastructure.qt_facade import QtCore
+            from krita_brush_replay.infrastructure.host.qt_facade import QtCore
 
             float_point_factory = QtCore.QPointF
         return method, stroke_point_factory, float_point_factory
@@ -270,14 +320,10 @@ class KritaReplayer:
             for sample in samples
         ]
 
-    def _require_context(self, expected: ContextRef, suffix: str) -> None:
-        if self._context_provider() != expected:
-            raise RuntimeError(f"the active document or layer changed {suffix}")
-
     def _wait_for_replay(
         self,
         document,
-        target: ContextRef,
+        run: _ReplayRun,
         on_complete: Callable[[], None],
         on_error: Callable[[Exception], None],
     ) -> None:
@@ -290,7 +336,7 @@ class KritaReplayer:
 
         def poll() -> None:
             try:
-                self._require_context(target, "while finishing replay")
+                run.require("while finishing replay")
                 if not try_lock():
                     if monotonic() >= deadline:
                         raise TimeoutError("Krita did not finish replay in time")
