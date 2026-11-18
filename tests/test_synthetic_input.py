@@ -4,7 +4,8 @@ from collections import deque
 
 import pytest
 
-from krita_brush_replay.domain.recording import BrushSample, InputPhase, PackedSamples
+from krita_brush_replay.domain.brush_samples import CompactBrushSamples
+from krita_brush_replay.domain.recording import BrushSample, InputPhase
 from krita_brush_replay.infrastructure.synthetic_input import (
     CanvasInputTarget,
     SyntheticInputReplayer,
@@ -180,7 +181,7 @@ def test_long_serialized_stroke_replays_every_sample_with_original_timing(replay
         BrushSample(index / 13, index / 17, index % 101 / 100, 1000 + index * 10)
         for index in range(1003)
     )
-    restored = PackedSamples.from_bytes(bytes(PackedSamples(samples)))
+    restored = CompactBrushSamples.from_bytes(bytes(CompactBrushSamples(samples)))
     completed, errors = [], []
 
     replayer.replay_stroke(

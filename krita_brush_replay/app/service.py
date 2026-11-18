@@ -8,17 +8,16 @@ from enum import Enum, auto
 from typing import Protocol
 
 from krita_brush_replay.domain.brush_override import StrokeSettings
+from krita_brush_replay.domain.brush_samples import CompactBrushSamplesBuilder
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
     ContextRef,
-    HistoryStep,
     InputPhase,
-    RecordingHistory,
     RecordingSession,
     Stroke,
 )
-from krita_brush_replay.domain.samples import SampleBuilder
+from krita_brush_replay.domain.recording_history import HistoryStep, RecordingHistory
 
 
 class ReplayHost(Protocol):
@@ -78,7 +77,7 @@ class BrushReplayService:
         self._context: ContextRef | None = None
         self._history = RecordingHistory()
         self._stroke_settings: list[StrokeSettings] = []
-        self._active_samples: SampleBuilder | None = None
+        self._active_samples: CompactBrushSamplesBuilder | None = None
         self._active_brush_state: BrushState | None = None
         self._message = "Ready. Record strokes on one paint layer."
         self._listeners: list[StateListener] = []
@@ -165,7 +164,7 @@ class BrushReplayService:
         if phase is InputPhase.PRESS:
             self._finish_active_stroke()
             self._active_brush_state = self._host.capture_brush_state()
-            self._active_samples = SampleBuilder()
+            self._active_samples = CompactBrushSamplesBuilder()
             self._active_samples.append(sample)
             self._notify()
         elif self._active_samples is not None:
@@ -285,13 +284,13 @@ class BrushReplayService:
         )
 
     def _record_history(self, entry: Stroke | HistoryStep) -> None:
-        stroke = self._history.apply(entry)
-        if stroke is None:
+        changed_stroke = self._history.apply(entry)
+        if changed_stroke is None:
             return
         if entry is HistoryStep.UNDO:
             self._stroke_settings.pop()
         else:
-            self._stroke_settings.append(StrokeSettings(stroke.brush_state))
+            self._stroke_settings.append(StrokeSettings(changed_stroke.brush_state))
 
     def _discard_active_stroke(self) -> None:
         self._active_samples = None

@@ -72,27 +72,27 @@ def _decode_block(block: bytes) -> bytes:
 
 
 @dataclass(frozen=True, slots=True, init=False, eq=False, repr=False)
-class PackedSamples(Sequence[BrushSample]):
+class CompactBrushSamples(Sequence[BrushSample]):
     _blocks: tuple[bytes, ...]
     _count: int
 
     def __init__(self, samples: Iterable[BrushSample]) -> None:
-        builder = SampleBuilder()
+        builder = CompactBrushSamplesBuilder()
         for sample in samples:
             builder.append(sample)
-        packed = builder.finish()
-        object.__setattr__(self, "_blocks", packed._blocks)
-        object.__setattr__(self, "_count", packed._count)
+        compacted = builder.finish()
+        object.__setattr__(self, "_blocks", compacted._blocks)
+        object.__setattr__(self, "_count", compacted._count)
 
     @classmethod
-    def _from_blocks(cls, blocks: tuple[bytes, ...], count: int) -> PackedSamples:
+    def _from_blocks(cls, blocks: tuple[bytes, ...], count: int) -> CompactBrushSamples:
         samples = object.__new__(cls)
         object.__setattr__(samples, "_blocks", blocks)
         object.__setattr__(samples, "_count", count)
         return samples
 
     @classmethod
-    def from_bytes(cls, data: bytes) -> PackedSamples:
+    def from_bytes(cls, data: bytes) -> CompactBrushSamples:
         if not data.startswith(_FORMAT):
             raise ValueError("unsupported sample format")
         blocks: list[bytes] = []
@@ -146,7 +146,7 @@ class PackedSamples(Sequence[BrushSample]):
             yield BrushSample(*_SAMPLE.unpack_from(data, sample_index * _SAMPLE.size))
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, PackedSamples):
+        if not isinstance(other, CompactBrushSamples):
             return NotImplemented
         if self is other:
             return True
@@ -162,7 +162,7 @@ class PackedSamples(Sequence[BrushSample]):
         return f"{type(self).__name__}(count={len(self)})"
 
 
-class SampleBuilder:
+class CompactBrushSamplesBuilder:
     __slots__ = ("_blocks", "_pending", "_count")
 
     def __init__(self) -> None:
@@ -192,11 +192,11 @@ class SampleBuilder:
         if self._count % _BLOCK_SAMPLES == 0:
             self._blocks.append(_encode_block(bytes(self._pending)))
 
-    def finish(self) -> PackedSamples:
+    def finish(self) -> CompactBrushSamples:
         count = self._count % _BLOCK_SAMPLES
         if count:
             self._blocks.append(_encode_block(bytes(self._pending[: count * _SAMPLE.size])))
-        samples = PackedSamples._from_blocks(tuple(self._blocks), self._count)
+        samples = CompactBrushSamples._from_blocks(tuple(self._blocks), self._count)
         self._blocks.clear()
         self._count = 0
         return samples

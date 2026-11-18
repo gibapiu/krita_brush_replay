@@ -1,11 +1,11 @@
 import pytest
 
+from krita_brush_replay.domain.brush_samples import CompactBrushSamples
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
     ColorState,
     ContextRef,
-    PackedSamples,
     ResourceRef,
     Stroke,
     normalized_input_speed,
@@ -79,14 +79,14 @@ def test_sample_serialization_preserves_every_axis_and_timestamp_exactly(count: 
         for index in range(count)
     )
 
-    restored = PackedSamples.from_bytes(bytes(PackedSamples(iter(samples))))
+    restored = CompactBrushSamples.from_bytes(bytes(CompactBrushSamples(iter(samples))))
 
     assert tuple(restored) == samples
     assert [sample.x_tilt.hex() for sample in restored] == [
         sample.x_tilt.hex() for sample in samples
     ]
-    assert restored == PackedSamples(samples)
-    assert hash(restored) == hash(PackedSamples(samples))
+    assert restored == CompactBrushSamples(samples)
+    assert hash(restored) == hash(CompactBrushSamples(samples))
     for selection in (slice(None, None, -1), slice(3, 900, 7), slice(800, 20, -3)):
         assert restored[selection] == samples[selection]
     for index in (0, -1, count // 2):
@@ -98,7 +98,9 @@ def test_sample_serialization_preserves_every_axis_and_timestamp_exactly(count: 
 
 @pytest.mark.parametrize("damage", ["unknown_format", "truncated", "corrupted", "trailing_data"])
 def test_incomplete_or_damaged_sample_recordings_are_rejected(damage: str) -> None:
-    encoded = bytes(PackedSamples(BrushSample(index / 7, 1, 0.5, index) for index in range(1003)))
+    encoded = bytes(
+        CompactBrushSamples(BrushSample(index / 7, 1, 0.5, index) for index in range(1003))
+    )
     if damage == "unknown_format":
         damaged = b"unknown" + encoded
     elif damage == "truncated":
@@ -111,12 +113,12 @@ def test_incomplete_or_damaged_sample_recordings_are_rejected(damage: str) -> No
         damaged = encoded + b"incomplete"
 
     with pytest.raises(ValueError):
-        PackedSamples.from_bytes(damaged)
+        CompactBrushSamples.from_bytes(damaged)
 
 
 def test_sample_equality_and_hashing_treat_signed_zeros_as_equal() -> None:
-    positive = PackedSamples((BrushSample(0.0, 0.0, 0.0, 0),))
-    negative = PackedSamples((BrushSample(-0.0, -0.0, -0.0, 0),))
+    positive = CompactBrushSamples((BrushSample(0.0, 0.0, 0.0, 0),))
+    negative = CompactBrushSamples((BrushSample(-0.0, -0.0, -0.0, 0),))
 
     assert positive == negative
     assert hash(positive) == hash(negative)

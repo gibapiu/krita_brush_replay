@@ -282,6 +282,26 @@ def test_undo_past_the_recording_start_needs_matching_redos_and_new_strokes_drop
     assert [stroke.samples[0].x for stroke in service.session.strokes] == [2.0]
 
 
+def test_undo_and_redo_without_recorded_changes_preserve_the_next_stroke() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    service.start_recording()
+
+    service.undo_triggered()
+    service.redo_triggered()
+    service.redo_triggered()
+    assert service.state.stroke_count == service.state.sample_count == 0
+
+    draw(service, 1.0)
+    service.redo_triggered()
+    service.stop_recording()
+    service.replay()
+
+    replayed, _target = host.replayed[0]
+    assert [tuple(stroke.samples) for stroke in replayed.strokes] == [(sample(1.0),)]
+    assert service.state.stroke_count == service.state.sample_count == 1
+
+
 def test_move_samples_do_not_query_krita_context() -> None:
     host = FakeHost()
     service = BrushReplayService(host)

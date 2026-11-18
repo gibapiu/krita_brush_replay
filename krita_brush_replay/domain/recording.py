@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
 from math import hypot
 
-from krita_brush_replay.domain.samples import BrushSample as BrushSample
-from krita_brush_replay.domain.samples import PackedSamples as PackedSamples
+from krita_brush_replay.domain.brush_samples import BrushSample as BrushSample
+from krita_brush_replay.domain.brush_samples import CompactBrushSamples
 
 DEFAULT_MAX_SPEED_PIXELS_PER_MS = 30.0
 
@@ -98,8 +98,8 @@ class Stroke:
     brush_state: BrushState
 
     def __post_init__(self) -> None:
-        if not isinstance(self.samples, PackedSamples):
-            object.__setattr__(self, "samples", PackedSamples(self.samples))
+        if not isinstance(self.samples, CompactBrushSamples):
+            object.__setattr__(self, "samples", CompactBrushSamples(self.samples))
         if not self.samples:
             raise ValueError("a stroke must contain at least one sample")
 
@@ -114,69 +114,6 @@ class RecordingSession:
     @property
     def sample_count(self) -> int:
         return sum(len(stroke.samples) for stroke in self.strokes)
-
-
-class HistoryStep(Enum):
-    """A Krita undo-stack step taken while recording."""
-
-    UNDO = auto()
-    REDO = auto()
-
-
-class RecordingHistory:
-    def __init__(self) -> None:
-        self._retained: list[Stroke] = []
-        self._undone: list[Stroke] = []
-        self._undone_before_recording = 0
-        self._sample_count = 0
-
-    @property
-    def strokes(self) -> tuple[Stroke, ...]:
-        return tuple(self._retained)
-
-    @property
-    def sample_count(self) -> int:
-        return self._sample_count
-
-    def clear(self) -> None:
-        self._retained.clear()
-        self.discard_redo()
-        self._sample_count = 0
-
-    def discard_redo(self) -> None:
-        self._undone.clear()
-        self._undone_before_recording = 0
-
-    def apply(self, entry: Stroke | HistoryStep) -> Stroke | None:
-        if entry is HistoryStep.UNDO:
-            if self._retained:
-                stroke = self._retained.pop()
-                self._undone.append(stroke)
-                self._sample_count -= len(stroke.samples)
-                return stroke
-            else:
-                self._undone_before_recording += 1
-        elif entry is HistoryStep.REDO:
-            if self._undone_before_recording:
-                self._undone_before_recording -= 1
-            elif self._undone:
-                stroke = self._undone.pop()
-                self._retained.append(stroke)
-                self._sample_count += len(stroke.samples)
-                return stroke
-        else:
-            self._retained.append(entry)
-            self.discard_redo()
-            self._sample_count += len(entry.samples)
-            return entry
-        return None
-
-
-def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, ...]:
-    retained = RecordingHistory()
-    for entry in history:
-        retained.apply(entry)
-    return retained.strokes
 
 
 def normalized_input_speed(
