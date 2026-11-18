@@ -14,10 +14,11 @@ from krita_brush_replay.domain.recording import (
     ContextRef,
     HistoryStep,
     InputPhase,
+    RecordingHistory,
     RecordingSession,
     Stroke,
-    retained_strokes,
 )
+from krita_brush_replay.domain.samples import SampleBuilder
 
 
 class ReplayHost(Protocol):
@@ -75,17 +76,16 @@ class BrushReplayService:
         self._host = host
         self._mode = ServiceMode.IDLE
         self._context: ContextRef | None = None
-        self._history: list[Stroke | HistoryStep] = []
-        self._strokes: list[Stroke] = []
+        self._history = RecordingHistory()
         self._stroke_settings: list[StrokeSettings] = []
-        self._active_samples: list[BrushSample] | None = None
+        self._active_samples: SampleBuilder | None = None
         self._active_brush_state: BrushState | None = None
         self._message = "Ready. Record strokes on one paint layer."
         self._listeners: list[StateListener] = []
 
     @property
     def state(self) -> ServiceState:
-        sample_count = sum(len(stroke.samples) for stroke in self._strokes)
+        sample_count = self._history.sample_count
         if self._active_samples is not None:
             sample_count += len(self._active_samples)
         return ServiceState(
@@ -99,7 +99,7 @@ class BrushReplayService:
     def session(self) -> RecordingSession | None:
         if self._context is None:
             return None
-        return RecordingSession(self._context, tuple(self._strokes))
+        return RecordingSession(self._context, self._history.strokes)
 
     def subscribe(self, listener: StateListener) -> None:
         self._listeners.append(listener)
@@ -124,7 +124,6 @@ class BrushReplayService:
             return
         self._context = context
         self._history.clear()
-        self._strokes.clear()
         self._stroke_settings.clear()
         self._discard_active_stroke()
         self._mode = ServiceMode.RECORDING
@@ -135,8 +134,9 @@ class BrushReplayService:
         if self._mode is not ServiceMode.RECORDING:
             return
         self._finish_active_stroke()
+        self._history.discard_redo()
         self._mode = ServiceMode.IDLE
-        self._message = f"Recorded {len(self._strokes)} stroke(s)."
+        self._message = f"Recorded {len(self._stroke_settings)} stroke(s)."
         self._notify()
 
     def accept_input(
@@ -165,7 +165,8 @@ class BrushReplayService:
         if phase is InputPhase.PRESS:
             self._finish_active_stroke()
             self._active_brush_state = self._host.capture_brush_state()
-            self._active_samples = [sample]
+            self._active_samples = SampleBuilder()
+            self._active_samples.append(sample)
             self._notify()
         elif self._active_samples is not None:
             self._active_samples.append(sample)
@@ -200,6 +201,7 @@ class BrushReplayService:
         if self._mode is not ServiceMode.RECORDING:
             return
         self._discard_active_stroke()
+        self._history.discard_redo()
         self._mode = ServiceMode.IDLE
         self._message = f"Recording stopped: {error}"
         self._notify()
@@ -232,9 +234,7 @@ class BrushReplayService:
         try:
             self._mode = ServiceMode.REPLAYING
             settings_name = "stroke" if use_original_settings else "current"
-            self._message = (
-                f"Replaying on the active layer with {settings_name} brush settings…"
-            )
+            self._message = f"Replaying on the active layer with {settings_name} brush settings…"
             self._notify()
             self._host.replay(
                 session,
@@ -275,7 +275,7 @@ class BrushReplayService:
 
     def _finish_active_stroke(self) -> None:
         if self._active_samples and self._active_brush_state is not None:
-            self._record_history(Stroke(self._active_samples, self._active_brush_state))
+            self._record_history(Stroke(self._active_samples.finish(), self._active_brush_state))
         self._discard_active_stroke()
 
     def _brush_was_resized(self) -> bool:
@@ -283,10 +283,15 @@ class BrushReplayService:
             self._active_brush_state is not None
             and self._host.capture_brush_state().size != self._active_brush_state.size
         )
+
     def _record_history(self, entry: Stroke | HistoryStep) -> None:
-        self._history.append(entry)
-        self._strokes = list(retained_strokes(self._history))
-        self._stroke_settings = [StrokeSettings(stroke.brush_state) for stroke in self._strokes]
+        stroke = self._history.apply(entry)
+        if stroke is None:
+            return
+        if entry is HistoryStep.UNDO:
+            self._stroke_settings.pop()
+        else:
+            self._stroke_settings.append(StrokeSettings(stroke.brush_state))
 
     def _discard_active_stroke(self) -> None:
         self._active_samples = None
@@ -294,6 +299,7 @@ class BrushReplayService:
 
     def _stop_for_context_change(self) -> None:
         self._discard_active_stroke()
+        self._history.discard_redo()
         self._mode = ServiceMode.IDLE
         self._message = "Recording stopped because the document or layer changed."
         self._notify()

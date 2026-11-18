@@ -71,20 +71,22 @@ class SyntheticInputReplayer:
             raise RuntimeError("prepare the canvas before replay")
         factory = self._event_factory
         started_ms = int(monotonic() * 1000)
-        source_ms = samples[0].timestamp_ms
+        sample_iterator = iter(samples)
+        current_sample = next(sample_iterator)
+        source_ms = current_sample.timestamp_ms
         entered = False
         pressed = False
         finished = False
-        index = 0
 
         def post(event, callback) -> None:
             poster.post(target.receiver, event, callback, finish)
 
         def finish(error: Exception | None = None) -> None:
-            nonlocal finished, pressed, entered
+            nonlocal finished, pressed, entered, sample_iterator
             if finished:
                 return
             finished = True
+            sample_iterator = iter(())
 
             def report() -> None:
                 if error is None:
@@ -118,7 +120,7 @@ class SyntheticInputReplayer:
                             InputPhase.RELEASE,
                             target.receiver,
                             position,
-                            samples[index],
+                            current_sample,
                             int(monotonic() * 1000),
                         ),
                         leave,
@@ -130,14 +132,15 @@ class SyntheticInputReplayer:
                 leave()
 
         def delivered(phase: InputPhase) -> None:
-            nonlocal index
+            nonlocal current_sample
             if phase is InputPhase.RELEASE:
                 finish()
                 return
-            if index + 1 < len(samples):
-                index += 1
+            following = next(sample_iterator, None)
+            if following is not None:
+                current_sample = following
                 # Absolute deadlines avoid adding event delivery time to every sample.
-                deadline_ms = started_ms + max(0, samples[index].timestamp_ms - source_ms)
+                deadline_ms = started_ms + max(0, current_sample.timestamp_ms - source_ms)
                 delay_ms = max(0, deadline_ms - int(monotonic() * 1000))
                 self._scheduler.call_later(delay_ms, lambda: emit(InputPhase.MOVE))
             else:
@@ -155,7 +158,7 @@ class SyntheticInputReplayer:
                     raise RuntimeError("the active canvas changed during replay")
                 if phase is InputPhase.PRESS:
                     started_ms = int(monotonic() * 1000)
-                sample = samples[index]
+                sample = current_sample
                 position = target.to_widget((sample.x, sample.y))
                 event = factory.create(
                     phase,
@@ -188,7 +191,7 @@ class SyntheticInputReplayer:
                 require_context()
                 if not target.is_valid():
                     raise RuntimeError("the active canvas changed during replay")
-                sample = samples[0]
+                sample = current_sample
                 # The first pen event switches Krita's tool/device. Do that without
                 # a pressed button, before applying settings or starting the stroke.
                 event = factory.hover(
@@ -209,7 +212,7 @@ class SyntheticInputReplayer:
                     raise RuntimeError("the active canvas changed during replay")
                 # Focus only after the Replay button's mouse handler has returned.
                 target.focus()
-                position = target.to_widget((samples[0].x, samples[0].y))
+                position = target.to_widget((current_sample.x, current_sample.y))
                 # Krita ignores presses until its shortcut matcher sees a canvas enter.
                 event = factory.enter(target.receiver, position)
                 entered = True

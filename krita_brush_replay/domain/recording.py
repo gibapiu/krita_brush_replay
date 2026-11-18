@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, fields
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from enum import Enum, auto
-from itertools import starmap
 from math import hypot
-from operator import attrgetter
-from struct import Struct
-from typing import overload
+
+from krita_brush_replay.domain.samples import BrushSample as BrushSample
+from krita_brush_replay.domain.samples import PackedSamples as PackedSamples
 
 DEFAULT_MAX_SPEED_PIXELS_PER_MS = 30.0
 
@@ -92,82 +91,6 @@ class BrushState:
 
 
 @dataclass(frozen=True, slots=True)
-class BrushSample:
-    """One input sample in image coordinates.
-
-    Native replay uses every field.
-    Tablet replay carries the input axes and timing so Krita can derive speed from the gesture.
-    """
-
-    x: float
-    y: float
-    pressure: float
-    timestamp_ms: int
-    x_tilt: float = 0.0
-    y_tilt: float = 0.0
-    rotation: float = 0.0
-    tangential_pressure: float = 0.0
-    speed: float = 0.0
-
-    def __post_init__(self) -> None:
-        if not 0.0 <= self.pressure <= 1.0:
-            raise ValueError("pressure must be between 0.0 and 1.0")
-        if self.timestamp_ms < 0:
-            raise ValueError("timestamp_ms must not be negative")
-        if not 0.0 <= self.speed <= 1.0:
-            raise ValueError("speed must be between 0.0 and 1.0")
-
-
-_PACKED_FORMAT_BY_TYPE = {"float": "d", "int": "q"}
-_SAMPLE_FIELDS = fields(BrushSample)
-_SAMPLE_LAYOUT = Struct(
-    "<" + "".join(_PACKED_FORMAT_BY_TYPE[field.type] for field in _SAMPLE_FIELDS)
-)
-_sample_values = attrgetter(*(field.name for field in _SAMPLE_FIELDS))
-
-
-class PackedSamples(Sequence[BrushSample]):
-    """Immutable samples packed into one byte string, so long recordings stay small in memory."""
-
-    __slots__ = ("_data",)
-
-    def __init__(self, samples: Iterable[BrushSample]) -> None:
-        self._data = b"".join(_SAMPLE_LAYOUT.pack(*_sample_values(sample)) for sample in samples)
-
-    def __len__(self) -> int:
-        return len(self._data) // _SAMPLE_LAYOUT.size
-
-    @overload
-    def __getitem__(self, index: int) -> BrushSample: ...
-
-    @overload
-    def __getitem__(self, index: slice) -> tuple[BrushSample, ...]: ...
-
-    def __getitem__(self, index: int | slice) -> BrushSample | tuple[BrushSample, ...]:
-        if isinstance(index, slice):
-            return tuple(self)[index]
-        offset = range(len(self))[index] * _SAMPLE_LAYOUT.size
-        return BrushSample(*_SAMPLE_LAYOUT.unpack_from(self._data, offset))
-
-    def __iter__(self) -> Iterator[BrushSample]:
-        return starmap(BrushSample, _SAMPLE_LAYOUT.iter_unpack(self._data))
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, PackedSamples):
-            return NotImplemented
-        return self._values() == other._values()
-
-    def __hash__(self) -> int:
-        return hash(self._values())
-
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}({list(self)!r})"
-
-    def _values(self) -> tuple[tuple[float | int, ...], ...]:
-        return tuple(_SAMPLE_LAYOUT.iter_unpack(self._data))
-
-
-@dataclass(frozen=True, slots=True)
 class Stroke:
     """A complete freehand input gesture."""
 
@@ -200,28 +123,60 @@ class HistoryStep(Enum):
     REDO = auto()
 
 
-def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, ...]:
-    """Keep the recorded strokes that remain on the canvas after undo and redo."""
+class RecordingHistory:
+    def __init__(self) -> None:
+        self._retained: list[Stroke] = []
+        self._undone: list[Stroke] = []
+        self._undone_before_recording = 0
+        self._sample_count = 0
 
-    retained: list[Stroke] = []
-    undone: list[Stroke] = []
-    undone_before_recording = 0
-    for entry in history:
+    @property
+    def strokes(self) -> tuple[Stroke, ...]:
+        return tuple(self._retained)
+
+    @property
+    def sample_count(self) -> int:
+        return self._sample_count
+
+    def clear(self) -> None:
+        self._retained.clear()
+        self.discard_redo()
+        self._sample_count = 0
+
+    def discard_redo(self) -> None:
+        self._undone.clear()
+        self._undone_before_recording = 0
+
+    def apply(self, entry: Stroke | HistoryStep) -> Stroke | None:
         if entry is HistoryStep.UNDO:
-            if retained:
-                undone.append(retained.pop())
+            if self._retained:
+                stroke = self._retained.pop()
+                self._undone.append(stroke)
+                self._sample_count -= len(stroke.samples)
+                return stroke
             else:
-                undone_before_recording += 1
+                self._undone_before_recording += 1
         elif entry is HistoryStep.REDO:
-            if undone_before_recording:
-                undone_before_recording -= 1
-            elif undone:
-                retained.append(undone.pop())
+            if self._undone_before_recording:
+                self._undone_before_recording -= 1
+            elif self._undone:
+                stroke = self._undone.pop()
+                self._retained.append(stroke)
+                self._sample_count += len(stroke.samples)
+                return stroke
         else:
-            retained.append(entry)
-            undone.clear()
-            undone_before_recording = 0
-    return tuple(retained)
+            self._retained.append(entry)
+            self.discard_redo()
+            self._sample_count += len(entry.samples)
+            return entry
+        return None
+
+
+def retained_strokes(history: Iterable[Stroke | HistoryStep]) -> tuple[Stroke, ...]:
+    retained = RecordingHistory()
+    for entry in history:
+        retained.apply(entry)
+    return retained.strokes
 
 
 def normalized_input_speed(
