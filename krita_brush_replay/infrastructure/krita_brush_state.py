@@ -110,11 +110,15 @@ class KritaBrushStateAdapter:
         preset_baselines = self._preset_baselines(view, states, saved_state, resources)
 
         def restore() -> None:
-            try:
-                for baseline in preset_baselines:
+            failures: list[tuple[str, Exception]] = []
+            for baseline in (*preset_baselines, saved_state):
+                try:
                     apply(baseline)
-            finally:
-                apply(saved_state)
+                except Exception as error:
+                    failures.append((baseline.preset.name, error))
+            if failures:
+                details = "; ".join(f"{name}: {error}" for name, error in failures)
+                raise RuntimeError(details) from failures[0][1]
 
         return PreparedBrushSettings(saved_state, apply, restore)
 
