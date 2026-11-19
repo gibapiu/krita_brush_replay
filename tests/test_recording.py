@@ -1,5 +1,6 @@
 import pytest
 
+from krita_brush_replay.domain.brush_samples import CompactBrushSamples
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -58,3 +59,66 @@ def test_normalized_input_speed_uses_distance_and_elapsed_time() -> None:
 
 def test_normalized_input_speed_is_zero_without_elapsed_time() -> None:
     assert normalized_input_speed((0.0, 0.0), 10, (30.0, 0.0), 10) == 0.0
+
+
+@pytest.mark.parametrize("count", [0, 1, 1003])
+def test_sample_serialization_preserves_every_axis_and_timestamp_exactly(count: int) -> None:
+    timestamps = (0, 0, 2**32 - 1, 2**32, 3, 2**63 - 1)
+    samples = tuple(
+        BrushSample(
+            x=index / 13,
+            y=-1e200 if index % 2 else 1e-200,
+            pressure=index % 101 / 100,
+            timestamp_ms=timestamps[index % len(timestamps)],
+            x_tilt=-0.0 if index % 2 else 0.0,
+            y_tilt=index / 17,
+            rotation=index / 19,
+            tangential_pressure=-index / 23,
+            speed=index % 97 / 96,
+        )
+        for index in range(count)
+    )
+
+    restored = CompactBrushSamples.from_bytes(bytes(CompactBrushSamples(iter(samples))))
+
+    assert tuple(restored) == samples
+    assert [sample.x_tilt.hex() for sample in restored] == [
+        sample.x_tilt.hex() for sample in samples
+    ]
+    assert restored == CompactBrushSamples(samples)
+    assert hash(restored) == hash(CompactBrushSamples(samples))
+    for selection in (slice(None, None, -1), slice(3, 900, 7), slice(800, 20, -3)):
+        assert restored[selection] == samples[selection]
+    for index in (0, -1, count // 2):
+        if samples:
+            assert restored[index] == samples[index]
+    with pytest.raises(IndexError):
+        restored[count]
+
+
+@pytest.mark.parametrize("damage", ["unknown_format", "truncated", "corrupted", "trailing_data"])
+def test_incomplete_or_damaged_sample_recordings_are_rejected(damage: str) -> None:
+    encoded = bytes(
+        CompactBrushSamples(BrushSample(index / 7, 1, 0.5, index) for index in range(1003))
+    )
+    if damage == "unknown_format":
+        damaged = b"unknown" + encoded
+    elif damage == "truncated":
+        damaged = encoded[:-1]
+    elif damage == "corrupted":
+        damaged = bytearray(encoded)
+        damaged[len(encoded) // 2] ^= 1
+        damaged = bytes(damaged)
+    else:
+        damaged = encoded + b"incomplete"
+
+    with pytest.raises(ValueError):
+        CompactBrushSamples.from_bytes(damaged)
+
+
+def test_sample_equality_and_hashing_treat_signed_zeros_as_equal() -> None:
+    positive = CompactBrushSamples((BrushSample(0.0, 0.0, 0.0, 0),))
+    negative = CompactBrushSamples((BrushSample(-0.0, -0.0, -0.0, 0),))
+
+    assert positive == negative
+    assert hash(positive) == hash(negative)

@@ -149,7 +149,57 @@ def test_long_recording_keeps_each_sample_small_in_memory() -> None:
         tracemalloc.stop()
 
     assert service.state.sample_count == strokes * samples_per_stroke
-    assert retained_bytes < strokes * samples_per_stroke * 100
+    assert retained_bytes < strokes * samples_per_stroke * 40
+
+
+def test_long_unfinished_stroke_stays_compact_without_a_large_release_allocation() -> None:
+    service = BrushReplayService(FakeHost())
+    service.start_recording()
+    count = 20_000
+    tracemalloc.start()
+    try:
+        service.accept_input(InputPhase.PRESS, sample(0))
+        for index in range(1, count):
+            service.accept_input(
+                InputPhase.MOVE, sample(index / 13, index % 101 / 100, timestamp_ms=index)
+            )
+        drawing_bytes, _ = tracemalloc.get_traced_memory()
+        drawing_count = service.state.sample_count
+        service.stop_recording()
+        retained_bytes, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert drawing_count == service.state.sample_count == count
+    assert drawing_bytes < count * 40
+    assert retained_bytes < count * 40
+    assert peak_bytes < count * 60
+    assert service.session is not None
+    samples = service.session.strokes[0].samples
+    assert samples[-1] == sample((count - 1) / 13, (count - 1) % 101 / 100, timestamp_ms=count - 1)
+
+
+def test_drawing_after_undo_releases_discarded_stroke_data() -> None:
+    service = BrushReplayService(FakeHost())
+    service.start_recording()
+    tracemalloc.start()
+    try:
+        for stroke in range(20):
+            service.accept_input(InputPhase.PRESS, sample(stroke))
+            for index in range(1, 1000):
+                service.accept_input(InputPhase.MOVE, sample(index / 13, timestamp_ms=index))
+            service.accept_input(InputPhase.RELEASE, None)
+            service.undo_triggered()
+        draw(service, 123.0)
+        service.stop_recording()
+        retained_bytes, _ = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert retained_bytes < 100_000
+    assert service.state.sample_count == 1
+    assert service.session is not None
+    assert [stroke.samples[0].x for stroke in service.session.strokes] == [123.0]
 
 
 def test_stopping_mid_stroke_keeps_the_samples_drawn_so_far() -> None:
@@ -230,6 +280,26 @@ def test_undo_past_the_recording_start_needs_matching_redos_and_new_strokes_drop
 
     assert service.session is not None
     assert [stroke.samples[0].x for stroke in service.session.strokes] == [2.0]
+
+
+def test_undo_and_redo_without_recorded_changes_preserve_the_next_stroke() -> None:
+    host = FakeHost()
+    service = BrushReplayService(host)
+    service.start_recording()
+
+    service.undo_triggered()
+    service.redo_triggered()
+    service.redo_triggered()
+    assert service.state.stroke_count == service.state.sample_count == 0
+
+    draw(service, 1.0)
+    service.redo_triggered()
+    service.stop_recording()
+    service.replay()
+
+    replayed, _target = host.replayed[0]
+    assert [tuple(stroke.samples) for stroke in replayed.strokes] == [(sample(1.0),)]
+    assert service.state.stroke_count == service.state.sample_count == 1
 
 
 def test_move_samples_do_not_query_krita_context() -> None:

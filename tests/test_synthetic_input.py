@@ -4,6 +4,7 @@ from collections import deque
 
 import pytest
 
+from krita_brush_replay.domain.brush_samples import CompactBrushSamples
 from krita_brush_replay.domain.recording import BrushSample, InputPhase
 from krita_brush_replay.infrastructure.synthetic_input import (
     CanvasInputTarget,
@@ -172,3 +173,32 @@ def test_failure_releases_the_original_canvas_and_leaves_before_reporting(replay
     assert len(errors) == 1
     assert errors[0][1] == loop.events
     assert completed == []
+
+
+def test_long_serialized_stroke_replays_every_sample_with_original_timing(replay) -> None:
+    replayer, loop, _focused, _valid = replay
+    samples = tuple(
+        BrushSample(index / 13, index / 17, index % 101 / 100, 1000 + index * 10)
+        for index in range(1003)
+    )
+    restored = CompactBrushSamples.from_bytes(bytes(CompactBrushSamples(samples)))
+    completed, errors = [], []
+
+    replayer.replay_stroke(
+        replayer.prepare(),
+        restored,
+        lambda: None,
+        lambda: completed.append(True),
+        errors.append,
+    )
+    loop.run()
+
+    gesture = [event for event in loop.events if isinstance(event, tuple)]
+    assert tuple(event[2] for event in gesture[:-1]) == samples
+    assert [event[3] - gesture[0][3] for event in gesture[:-1]] == [
+        sample.timestamp_ms - samples[0].timestamp_ms for sample in samples
+    ]
+    assert gesture[0][0] is InputPhase.PRESS
+    assert gesture[-1][0] is InputPhase.RELEASE
+    assert completed == [True]
+    assert errors == []
