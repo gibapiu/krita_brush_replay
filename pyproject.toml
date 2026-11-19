@@ -4,9 +4,20 @@ version = "0.1.0"
 description = "Record Krita brush strokes and replay their input and settings"
 requires-python = ">=3.10"
 
+[project.optional-dependencies]
+test = ["pytest==9.0.2", "ruff==0.17.5"]
+qt6-test = ["PyQt6==6.12.1", "PyQt6-Qt6==6.12.0", "PyQt6-sip==13.13.1"]
+qt5-test = ["PyQt5==5.15.11", "PyQt5-Qt5==5.15.19", "PyQt5-sip==12.20.1"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "qt: requires an explicitly selected real Qt binding",
+    "performance: opt-in memory and responsiveness budgets",
+    "algorithms: focused lossless compaction contracts",
+]
 
 [tool.ruff]
 target-version = "py310"

@@ -190,9 +190,11 @@ class StrokeSettingsEditor(QtWidgets.QGroupBox):
 
         layout = QtWidgets.QFormLayout(self)
         for setting, (label, field) in self._fields.items():
+            field.setAccessibleName(label)
             reset_button = QtWidgets.QToolButton()
             reset_button.setText(RESET_SYMBOL)
             reset_button.setToolTip(f"Reset {label.lower()} to the recorded value")
+            reset_button.setAccessibleName(f"Reset {label.lower()} to the recorded value")
             reset_button.clicked.connect(
                 lambda _checked=False, name=setting: self.reset_requested.emit(name)
             )
