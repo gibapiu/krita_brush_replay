@@ -16,4 +16,4 @@ performance:
 
 quality:
 	$(PYTHON) -m ruff check .
-	$(PYTHON) tools/check_architecture.py
+	$(PYTHON) tools/verify_dependencies.py

@@ -1,4 +1,4 @@
-"""Static dependency policy, independent of the invoking working directory."""
+"""Check the plugin's imports."""
 
 from __future__ import annotations
 
@@ -52,33 +52,33 @@ def matches(module: str, prefixes: tuple[str, ...]) -> bool:
 def main() -> int:
     files = sorted(PACKAGE.rglob("*.py"))
     if not files:
-        print(f"No production Python files found at {PACKAGE}", file=sys.stderr)
+        print(f"No Python files found in {PACKAGE}", file=sys.stderr)
         return 1
-    violations = []
+    problems = []
     for path in files:
         relative = path.relative_to(PACKAGE)
         for module in sorted(imported_modules(path)):
             reason = None
             if relative.parts[0] in {"domain", "app"} and matches(module, HOST_PREFIXES):
-                reason = "pure layers must not depend on host/composition layers"
+                reason = "domain and app must not import this module"
             elif matches(module, ("PyQt5", "PyQt6")) and relative.as_posix() != (
                 "infrastructure/qt_facade.py"
             ):
-                reason = "Qt binding imports belong in qt_facade"
+                reason = "import Qt through infrastructure/qt_facade.py"
             elif matches(module, ("krita",)) and relative.as_posix() not in KRITA_MODULES:
-                reason = "Krita imports belong in the Krita adapters"
+                reason = "import Krita only in the Krita adapter files"
             elif relative.parts[0] in {"domain", "app", "infrastructure", "ui", "runtime.py"}:
                 if matches(
                     module, ("krita_brush_replay.observability", "krita_brush_replay.composition")
                 ):
-                    reason = "core must not depend on instrumentation/composition"
+                    reason = "do not import diagnostics or plugin setup here"
             if reason:
-                violations.append(f"{relative}: {module}: {reason}")
-    for violation in violations:
-        print(violation, file=sys.stderr)
-    if not violations:
-        print(f"Architecture policy passed ({len(files)} production files)")
-    return bool(violations)
+                problems.append(f"{relative} imports {module}: {reason}")
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if not problems:
+        print(f"Dependencies OK ({len(files)} files)")
+    return bool(problems)
 
 
 if __name__ == "__main__":
