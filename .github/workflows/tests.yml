@@ -28,6 +28,7 @@ jobs:
   qt:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         api: [pyqt5, pyqt6]
     env:
@@ -37,6 +38,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+      - name: Install Qt graphics libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libegl1 libgl1 libopengl0
       - name: Install selected real Qt binding
         run: |
           if [ '${{ matrix.api }}' = pyqt5 ]; then
