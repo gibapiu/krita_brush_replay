@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from math import log10
 
 from krita_brush_replay.domain.brush_override import (
     MEANINGFUL_DECIMALS,
     BrushChoices,
-    SelectionSummary,
-    StrokeSettings,
+    RecordingSettings,
 )
 from krita_brush_replay.domain.recording import ColorState, ResourceRef
 from krita_brush_replay.infrastructure.qt_facade import QtCore, QtGui, QtWidgets, qt_enum
@@ -207,7 +206,7 @@ class StrokeSettingsEditor(QtWidgets.QGroupBox):
             row.addWidget(reset_button)
             layout.addRow(label, row)
             self._reset_buttons[setting] = reset_button
-        self.show_settings(())
+        self.show_settings(RecordingSettings())
 
     def set_choices(self, choices: BrushChoices) -> None:
         self._choice_field("preset").set_choices(choices.presets)
@@ -216,14 +215,13 @@ class StrokeSettingsEditor(QtWidgets.QGroupBox):
         self._blending_mode_labels = dict(choices.blending_modes)
         self._choice_field("blending_mode").set_choices(tuple(choices.blending_modes))
 
-    def show_settings(self, selected: Iterable[StrokeSettings]) -> None:
-        summary = SelectionSummary.from_strokes(selected)
-        self.setTitle(
-            f"Editing strokes: {summary.count}" if summary.count else "Select strokes to edit"
-        )
+    def show_settings(self, settings: RecordingSettings) -> None:
+        self.setTitle(_title(settings.stroke_count))
+        effective = settings.effective
+        overridden = settings.override.overridden_settings
         for setting, (_label, field) in self._fields.items():
-            field.show_value(summary.common.get(setting))
-            self._reset_buttons[setting].setEnabled(setting in summary.overridden)
+            field.show_value(effective[setting])
+            self._reset_buttons[setting].setEnabled(setting in overridden)
 
     def _choice_field(self, setting: str) -> ChoiceField:
         return self._fields[setting][1]
@@ -242,6 +240,14 @@ def _number_field(
 ) -> NumberField:
     decimals = MEANINGFUL_DECIMALS[setting]
     return NumberField(minimum, maximum, suffix=suffix, decimals=decimals, scale=scale)
+
+
+def _title(stroke_count: int) -> str:
+    if stroke_count == 0:
+        return "Record strokes to edit"
+    if stroke_count == 1:
+        return "Editing 1 stroke"
+    return f"Editing all {stroke_count} strokes"
 
 
 def _resource_name(resource: ResourceRef) -> str:

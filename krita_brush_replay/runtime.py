@@ -49,7 +49,7 @@ class BrushReplayRuntime:
     def _apply_state(self, state: ServiceState) -> None:
         if self._closed:
             return
-        self._panel.apply_state(state, self._service.stroke_settings())
+        self._panel.apply_state(state, self._service.recording_settings())
         self._set_capturing(state.mode is ServiceMode.RECORDING)
         recording_finished = self._mode is ServiceMode.RECORDING and state.can_replay
         self._mode = state.mode

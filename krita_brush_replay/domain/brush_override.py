@@ -40,22 +40,7 @@ class BrushStatePatch:
         )
 
 
-@dataclass(frozen=True, slots=True)
-class StrokeSettings:
-    recorded: BrushState
-    override: BrushStatePatch = BrushStatePatch()
-    effective: BrushState = field(init=False, compare=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "effective", self.override.apply_to(self.recorded))
-
-    def overriding(self, setting: str, value: object) -> StrokeSettings:
-        if _same_value(setting, getattr(self.recorded, setting), value):
-            return self.resetting(setting)
-        return replace(self, override=self.override.with_setting(setting, value))
-
-    def resetting(self, setting: str) -> StrokeSettings:
-        return replace(self, override=self.override.without_setting(setting))
+SETTINGS = tuple(setting.name for setting in fields(BrushStatePatch))
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,43 +51,46 @@ class BrushChoices:
     blending_modes: Mapping[str, str] = field(default_factory=dict)
 
 
-def _same_value(setting: str, recorded: object, value: object) -> bool:
+def _shown(setting: str, value: object) -> object:
     decimals = MEANINGFUL_DECIMALS.get(setting)
-    if decimals is None:
-        return recorded == value
-    return round(recorded, decimals) == round(value, decimals)
+    return value if decimals is None else round(value, decimals)
 
 
 @dataclass(frozen=True, slots=True)
-class SelectionSummary:
-    count: int
-    common: Mapping[str, object]
-    overridden: frozenset[str]
+class RecordingSettings:
+    stroke_count: int = 0
+    recorded: Mapping[str, object] = field(default_factory=dict)
+    override: BrushStatePatch = BrushStatePatch()
 
     @classmethod
-    def from_strokes(cls, strokes: Iterable[StrokeSettings]) -> SelectionSummary:
-        names = tuple(setting.name for setting in fields(BrushStatePatch))
+    def summarize(
+        cls,
+        stroke_count: int,
+        brushes: Iterable[BrushState],
+        override: BrushStatePatch,
+    ) -> RecordingSettings:
         common: dict[str, object] = {}
-        overridden: set[str] = set()
-        count = 0
-        seen: dict[int, StrokeSettings] = {}
-        for stroke in strokes:
-            count += 1
-            identity = id(stroke)
-            if identity in seen:
-                continue
-            if len(seen) == 64:
-                seen.clear()
-            seen[identity] = stroke
-            for name in names:
-                if count > 1 and common[name] is None:
-                    continue
-                value = getattr(stroke.effective, name)
-                if name in MEANINGFUL_DECIMALS:
-                    value = round(value, MEANINGFUL_DECIMALS[name])
-                if count == 1:
+        for brush in brushes:
+            for name in SETTINGS:
+                value = _shown(name, getattr(brush, name))
+                if name not in common:
                     common[name] = value
                 elif common[name] != value:
                     common[name] = None
-            overridden.update(stroke.override.overridden_settings)
-        return cls(count, common, frozenset(overridden))
+        return cls(stroke_count, common, override)
+
+    @property
+    def effective(self) -> dict[str, object]:
+        overridden = self.override.overridden_settings
+        return {
+            name: _shown(name, getattr(self.override, name))
+            if name in overridden
+            else self.recorded.get(name)
+            for name in SETTINGS
+        }
+
+    def overriding(self, setting: str, value: object) -> BrushStatePatch:
+        recorded = self.recorded.get(setting)
+        if recorded is not None and _shown(setting, value) == recorded:
+            return self.override.without_setting(setting)
+        return self.override.with_setting(setting, value)

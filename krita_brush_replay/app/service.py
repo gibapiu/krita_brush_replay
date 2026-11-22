@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Protocol
 
 from krita_brush_replay.app.recording import Recording
 from krita_brush_replay.app.recording_store import RecordingStore, StorageBusyError
-from krita_brush_replay.domain.brush_override import StrokeSettings
+from krita_brush_replay.domain.brush_override import BrushStatePatch, RecordingSettings
 from krita_brush_replay.domain.recording import (
     BrushSample,
     BrushState,
@@ -49,7 +49,7 @@ class ServiceState:
     sample_count: int
     message: str
     stroke_count: int
-    settings_revision: int
+    settings_readable: bool
 
     @property
     def can_record(self) -> bool:
@@ -62,6 +62,10 @@ class ServiceState:
     @property
     def can_replay(self) -> bool:
         return self.mode is ServiceMode.IDLE and self.stroke_count > 0
+
+    @property
+    def can_edit(self) -> bool:
+        return self.can_replay and self.settings_readable
 
 
 StateListener = Callable[[ServiceState], None]
@@ -81,6 +85,9 @@ class BrushReplayService:
         self._active_brush_state: BrushState | None = None
         self._message = "Ready. Record strokes on one paint layer."
         self._listeners: list[StateListener] = []
+        self._settings = RecordingSettings()
+        self._settings_revision: int | None = None
+        self._settings_readable = True
 
     @property
     def state(self) -> ServiceState:
@@ -89,14 +96,31 @@ class BrushReplayService:
             mode=self._mode,
             sample_count=0 if unavailable else self._recording.sample_count,
             message=self._message,
-            stroke_count=0 if unavailable else len(self._recording.settings),
-            settings_revision=self._recording.revision,
+            stroke_count=0 if unavailable else self._recording.stroke_count,
+            settings_readable=self._settings_readable,
         )
 
-    def stroke_settings(self) -> Sequence[StrokeSettings]:
+    def recording_settings(self) -> RecordingSettings:
+        return self._settings
+
+    def _refresh_settings(self) -> None:
         if self._closed or self._storage_failed or self._mode is ServiceMode.RECORDING:
-            return ()
-        return self._recording.settings
+            self._settings = RecordingSettings()
+            self._settings_revision = None
+            self._settings_readable = True
+            return
+        if self._settings_revision == self._recording.revision:
+            return
+        try:
+            self._settings = self._recording.settings()
+        except (OSError, ValueError) as error:
+            if self._settings_readable:
+                self._message = f"Could not read brush settings: {error}"
+            self._settings = RecordingSettings()
+            self._settings_readable = False
+            return
+        self._settings_revision = self._recording.revision
+        self._settings_readable = True
 
     @property
     def session(self) -> RecordingSession | None:
@@ -106,6 +130,7 @@ class BrushReplayService:
 
     def subscribe(self, listener: StateListener) -> None:
         self._listeners.append(listener)
+        self._refresh_settings()
         listener(self.state)
 
     def unsubscribe(self, listener: StateListener) -> None:
@@ -152,7 +177,7 @@ class BrushReplayService:
             self._recording_failed(error)
             return
         self._mode = ServiceMode.IDLE
-        self._message = f"Recorded {len(self._recording.settings)} stroke(s)."
+        self._message = f"Recorded {self._recording.stroke_count} stroke(s)."
         self._notify()
 
     def accept_input(
@@ -253,19 +278,14 @@ class BrushReplayService:
             str(error) if isinstance(error, TimeoutError) else f"Recording stopped: {error}"
         )
         if not self._storage_failed:
-            self._message += f" Kept {len(self._recording.settings)} stroke(s)."
+            self._message += f" Kept {self._recording.stroke_count} stroke(s)."
         self._notify()
 
-    def override_setting(
-        self,
-        stroke_indexes: Iterable[int],
-        setting: str,
-        value: object,
-    ) -> None:
-        self._edit_strokes(stroke_indexes, lambda stroke: stroke.overriding(setting, value))
+    def override_setting(self, setting: str, value: object) -> None:
+        self._edit_settings(lambda settings: settings.overriding(setting, value))
 
-    def reset_setting(self, stroke_indexes: Iterable[int], setting: str) -> None:
-        self._edit_strokes(stroke_indexes, lambda stroke: stroke.resetting(setting))
+    def reset_setting(self, setting: str) -> None:
+        self._edit_settings(lambda settings: settings.override.without_setting(setting))
 
     def replay(self) -> None:
         self._replay(use_original_settings=True)
@@ -295,17 +315,13 @@ class BrushReplayService:
         except Exception as error:
             self._replay_failed(error)
 
-    def _edit_strokes(
-        self,
-        stroke_indexes: Iterable[int],
-        edit: Callable[[StrokeSettings], StrokeSettings],
-    ) -> None:
-        if self._mode is not ServiceMode.IDLE:
+    def _edit_settings(self, edit: Callable[[RecordingSettings], BrushStatePatch]) -> None:
+        if not self.state.can_edit:
             return
         try:
-            self._recording.edit(stroke_indexes, edit)
-        except (AttributeError, IndexError, OSError, TypeError, ValueError) as error:
-            self._set_message(f"Could not change stroke settings: {error}")
+            self._recording.edit(edit)
+        except (AttributeError, OSError, TypeError, ValueError) as error:
+            self._set_message(f"Could not change brush settings: {error}")
             return
         self._notify()
 
@@ -367,6 +383,7 @@ class BrushReplayService:
         self._notify()
 
     def _notify(self) -> None:
+        self._refresh_settings()
         state = self.state
         for listener in tuple(self._listeners):
             listener(state)

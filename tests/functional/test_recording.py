@@ -84,7 +84,7 @@ def test_only_a_valid_new_recording_replaces_the_session_and_edits(service_facto
     service.start_recording()
     draw(service, 1)
     service.stop_recording()
-    service.override_setting((0,), "size", 40.0)
+    service.override_setting("size", 40.0)
 
     host.context = None
     service.start_recording()
@@ -273,8 +273,8 @@ def test_interrupting_a_long_stroke_preserves_completed_input_and_allows_restart
     assert len(bench.krita.document.layer.writes) == 2
 
 
-def test_brush_changes_and_bulk_edits_preserve_each_recorded_setting(service_factory):
-    """Many brush changes retain their recorded settings through bulk edits and reset."""
+def test_editing_all_strokes_preserves_each_stroke_s_other_settings(service_factory):
+    """Editing one setting for all strokes keeps every other recorded setting per stroke."""
 
     host = ReplayHost()
     service = service_factory(host)
@@ -284,15 +284,14 @@ def test_brush_changes_and_bulk_edits_preserve_each_recorded_setting(service_fac
         host.brush = brush
         draw(service, index)
     service.stop_recording()
-    service.override_setting(range(0, len(brushes), 2), "opacity", 0.25)
+    service.override_setting("opacity", 0.25)
     service.replay()
     strokes = host.outputs[-1].strokes
     assert [stroke.brush_state for stroke in strokes] == [
-        replace(brush, opacity=0.25) if index % 2 == 0 else brush
-        for index, brush in enumerate(brushes)
+        replace(brush, opacity=0.25) for brush in brushes
     ]
     assert [stroke.samples[0].x for stroke in strokes] == list(range(len(brushes)))
-    service.reset_setting(range(len(brushes)), "opacity")
+    service.reset_setting("opacity")
     service.replay()
     assert [stroke.brush_state for stroke in host.outputs[-1].strokes] == brushes
 
@@ -332,7 +331,7 @@ def test_storage_failure_keeps_complete_written_strokes_and_their_edits(
         assert "Try again shortly" in service.state.message
         assert service.state.stroke_count == kept
     assert service.state.sample_count == sum(len(points) for points in expected[:kept])
-    service.override_setting(range(kept), "size", 40.0)
+    service.override_setting("size", 40.0)
     service.replay()
     assert [tuple(stroke.samples) for stroke in host.outputs[-1].strokes] == expected[:kept]
     assert all(stroke.brush_state.size == 40 for stroke in host.outputs[-1].strokes)
