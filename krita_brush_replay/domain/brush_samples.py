@@ -71,6 +71,26 @@ def _decode_block(block: bytes) -> bytes:
     return bytes(data)
 
 
+def _serialized_blocks(data: bytes) -> Iterator[tuple[bytes, int]]:
+    if not data.startswith(_FORMAT):
+        raise ValueError("unsupported sample format")
+    offset, count = len(_FORMAT), _BLOCK_SAMPLES
+    while offset < len(data):
+        if count != _BLOCK_SAMPLES or len(data) - offset < _BLOCK_HEADER.size:
+            raise ValueError("incomplete sample block")
+        count, _encoding, length = _BLOCK_HEADER.unpack_from(data, offset)
+        if length > _BLOCK_BYTES:
+            raise ValueError("sample block exceeds its size limit")
+        end = offset + _BLOCK_HEADER.size + length
+        yield bytes(data[offset:end]), count
+        offset = end
+
+
+def decode_samples(data: bytes) -> Iterator[BrushSample]:
+    for block, _count in _serialized_blocks(data):
+        yield from starmap(BrushSample, _SAMPLE.iter_unpack(_decode_block(block)))
+
+
 @dataclass(frozen=True, slots=True, init=False, eq=False, repr=False)
 class CompactBrushSamples(Sequence[BrushSample]):
     _blocks: tuple[bytes, ...]
@@ -93,23 +113,13 @@ class CompactBrushSamples(Sequence[BrushSample]):
 
     @classmethod
     def from_bytes(cls, data: bytes) -> CompactBrushSamples:
-        if not data.startswith(_FORMAT):
-            raise ValueError("unsupported sample format")
         blocks: list[bytes] = []
-        offset, total, count = len(_FORMAT), 0, _BLOCK_SAMPLES
-        while offset < len(data):
-            if count != _BLOCK_SAMPLES or len(data) - offset < _BLOCK_HEADER.size:
-                raise ValueError("incomplete sample block")
-            count, _encoding, length = _BLOCK_HEADER.unpack_from(data, offset)
-            if length > _BLOCK_BYTES:
-                raise ValueError("sample block exceeds its size limit")
-            end = offset + _BLOCK_HEADER.size + length
-            block = bytes(data[offset:end])
+        total = 0
+        for block, count in _serialized_blocks(data):
             for values in _SAMPLE.iter_unpack(_decode_block(block)):
                 BrushSample(*values)
             blocks.append(block)
             total += count
-            offset = end
         return cls._from_blocks(tuple(blocks), total)
 
     def __bytes__(self) -> bytes:

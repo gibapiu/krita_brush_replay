@@ -1,18 +1,19 @@
-"""Opt-in memory budgets for active strokes and recording history."""
+"""Opt-in memory budgets for long strokes and large recordings."""
 
 import tracemalloc
 
-from krita_brush_replay.app.service import BrushReplayService
 from krita_brush_replay.domain.recording import BrushSample, InputPhase
-from tests.support.recording import ReplayHost, draw
+from tests.support.recording import ReplayHost
 
 
-def test_long_active_stroke_stays_compact_during_capture_and_stop():
-    """Long active stroke stays compact during capture and stop."""
+def test_a_long_active_stroke_has_a_fixed_memory_budget(service_factory):
+    """Growing a stroke tenfold does not retain its samples in memory."""
 
-    service = BrushReplayService(ReplayHost())
+    host = ReplayHost()
+    service = service_factory(host)
     service.start_recording()
-    count = 20_000
+    measured = []
+    count = 200_000
     tracemalloc.start()
     try:
         service.accept_input(InputPhase.PRESS, BrushSample(0, 4, 0.5, 0))
@@ -20,41 +21,48 @@ def test_long_active_stroke_stays_compact_during_capture_and_stop():
             service.accept_input(
                 InputPhase.MOVE, BrushSample(index / 13, 4, index % 101 / 100, index * 8)
             )
-        drawing_bytes, _ = tracemalloc.get_traced_memory()
+            if index in (19_999, count - 1):
+                measured.append(tracemalloc.get_traced_memory()[0])
         service.stop_recording()
-        retained_bytes, peak_bytes = tracemalloc.get_traced_memory()
+        retained, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert drawing_bytes < count * 40
-    assert retained_bytes < count * 40
-    assert peak_bytes < count * 60
+    assert measured[1] < measured[0] + 500_000
+    assert peak < 4_000_000
+    assert retained < 500_000
+    service.replay()
     assert service.state.sample_count == count
-    assert service.session.strokes[0].samples[-1] == BrushSample(
+    assert host.outputs[0].strokes[0].samples[-1] == BrushSample(
         (count - 1) / 13, 4, (count - 1) % 101 / 100, (count - 1) * 8
     )
 
 
-def test_many_strokes_and_discarded_history_remain_within_recording_budget():
-    """Many strokes and discarded history remain within recording budget."""
+def test_a_large_recording_stays_within_its_memory_budget(service_factory):
+    """More than thirty thousand strokes retain a small recording footprint."""
 
-    service = BrushReplayService(ReplayHost())
+    host = ReplayHost()
+    service = service_factory(host)
     service.start_recording()
+    retained = []
     tracemalloc.start()
     try:
-        for stroke in range(20):
-            service.accept_input(InputPhase.PRESS, BrushSample(stroke, 4, 0.5, 0))
-            for index in range(1, 1000):
-                service.accept_input(InputPhase.MOVE, BrushSample(index / 13, 4, 0.5, index * 8))
+        for index in range(32_000):
+            service.accept_input(InputPhase.PRESS, BrushSample(index, 4, 0.5, index * 8))
+            for point in range(1, 4):
+                service.accept_input(
+                    InputPhase.MOVE, BrushSample(index + point / 13, 4, 0.7, index * 8 + point)
+                )
             service.accept_input(InputPhase.RELEASE, None)
-        retained_bytes, _ = tracemalloc.get_traced_memory()
-        for _ in range(20):
-            service.undo_triggered()
-        draw(service, 123)
+            if index in (7_999, 31_999):
+                retained.append(tracemalloc.get_traced_memory()[0])
         service.stop_recording()
-        after_branch, _ = tracemalloc.get_traced_memory()
+        final, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert retained_bytes < 20_000 * 40
-    assert after_branch < 100_000
-    assert service.state.sample_count == 1
-    assert service.session.strokes[0].samples[0].x == 123
+    assert retained[1] < retained[0] + 1_500_000
+    assert peak < 8_000_000
+    assert final < 1_500_000
+    service.replay()
+    assert service.state.stroke_count == 32_000
+    assert service.state.sample_count == 128_000
+    assert host.outputs[0].strokes[-1].samples[-1].x == 31_999 + 3 / 13

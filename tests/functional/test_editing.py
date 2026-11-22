@@ -4,15 +4,14 @@ from time import monotonic
 
 import pytest
 
-from krita_brush_replay.app.service import BrushReplayService
 from tests.support.recording import RECORDED, ReplayHost, draw
 
 
-def test_returning_to_displayed_precision_restores_exact_recorded_value() -> None:
+def test_returning_to_displayed_precision_restores_exact_recorded_value(service_factory) -> None:
     """Returning to displayed precision restores exact recorded value."""
 
     host = ReplayHost()
-    service = BrushReplayService(host)
+    service = service_factory(host)
     service.start_recording()
     draw(service, 1)
     service.stop_recording()
@@ -24,7 +23,9 @@ def test_returning_to_displayed_precision_restores_exact_recorded_value() -> Non
 
     assert host.outputs[0].strokes[0].brush_state.size == 12.345
     assert host.outputs[0].strokes[0].brush_state.opacity == 0.25
-    assert service.session.strokes[0].brush_state == RECORDED
+    service.reset_setting((0,), "opacity")
+    service.replay()
+    assert host.outputs[-1].strokes[0].brush_state == RECORDED
 
 
 @pytest.mark.qt
@@ -120,20 +121,17 @@ def test_mixed_selection_changes_only_after_a_deliberate_edit(workbench):
 def test_edited_marker_disappears_only_after_every_override_is_cleared(workbench):
     """Edited marker disappears only after every override is cleared."""
 
-    from krita_brush_replay.infrastructure.qt_facade import QtWidgets
-
     bench = workbench
     bench.record()
     bench.select(0)
-    listing = bench.panel.findChild(QtWidgets.QListWidget)
     bench.number("Size", 40)
     bench.number("Opacity", 25)
     bench.number("Size", 12.35)
     assert not bench.field("Reset size to the recorded value").isEnabled()
-    assert "✎" in listing.item(0).text()
+    assert "✎" in bench.stroke_labels()[0]
     bench.number("Opacity", 80)
     assert not bench.field("Reset opacity to the recorded value").isEnabled()
-    assert "✎" not in listing.item(0).text()
+    assert "✎" not in bench.stroke_labels()[0]
 
 
 @pytest.mark.qt
@@ -210,3 +208,47 @@ def test_colour_dialog_only_changes_recording_when_a_colour_is_chosen(workbench,
     bench.replay()
     actual = bench.krita.document.layer.writes[0][0]["foreground"]
     assert actual == ((1, 0, 0, 1) if action == "pick" else (0.1, 0.2, 0.3, 1))
+
+
+@pytest.mark.qt
+def test_edits_and_replay_do_not_need_a_writable_recording_file(workbench, recording_io):
+    """Disk-full during idle editing leaves capture data and replay available."""
+
+    bench = workbench
+    bench.record(3)
+    recording_io.error = "No space left on device"
+    bench.click("Select all strokes")
+    bench.number("Size", 40)
+    assert all("Unavailable" not in label for label in bench.stroke_labels())
+    bench.replay()
+    assert [state["size"] for state, _ in bench.krita.document.layer.writes] == [40, 40, 40]
+    recording_io.error = None
+    bench.number("Size", 50)
+    bench.replay()
+    assert [state["size"] for state, _ in bench.krita.document.layer.writes[-3:]] == [50, 50, 50]
+
+
+@pytest.mark.qt
+def test_retry_after_a_failed_reset_clears_the_previous_selection_and_edits(
+    workbench, recording_io
+):
+    """A replacement recording shows its own strokes and settings after a storage failure."""
+
+    bench = workbench
+    bench.record()
+    bench.select(0)
+    bench.number("Size", 40)
+    recording_io.error = "new recording unavailable"
+    bench.click("Record new session")
+    assert bench.message_contains("new recording unavailable")
+    assert bench.button("Record new session").isEnabled()
+    assert not bench.button("Replay").isEnabled()
+    assert bench.stroke_labels() == ()
+    recording_io.error = None
+    bench.record()
+    assert not bench.field("Size").isEnabled()
+    bench.select(0)
+    assert bench.field("Size").value() == 12.35
+    assert not bench.field("Reset size to the recorded value").isEnabled()
+    bench.replay()
+    assert [state["size"] for state, _ in bench.krita.document.layer.writes] == [12.345]

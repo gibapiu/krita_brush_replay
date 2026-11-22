@@ -8,7 +8,6 @@ from enum import Enum, auto
 from math import hypot
 
 from krita_brush_replay.domain.brush_samples import BrushSample as BrushSample
-from krita_brush_replay.domain.brush_samples import CompactBrushSamples
 
 DEFAULT_MAX_SPEED_PIXELS_PER_MS = 30.0
 
@@ -98,8 +97,6 @@ class Stroke:
     brush_state: BrushState
 
     def __post_init__(self) -> None:
-        if not isinstance(self.samples, CompactBrushSamples):
-            object.__setattr__(self, "samples", CompactBrushSamples(self.samples))
         if not self.samples:
             raise ValueError("a stroke must contain at least one sample")
 
@@ -109,7 +106,7 @@ class RecordingSession:
     """All strokes and the document and layer where they were recorded."""
 
     origin: ContextRef
-    strokes: tuple[Stroke, ...]
+    strokes: Sequence[Stroke]
 
     @property
     def sample_count(self) -> int:

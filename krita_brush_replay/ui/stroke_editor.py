@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from math import log10
 
 from krita_brush_replay.domain.brush_override import (
     MEANINGFUL_DECIMALS,
     BrushChoices,
+    SelectionSummary,
     StrokeSettings,
 )
 from krita_brush_replay.domain.recording import ColorState, ResourceRef
@@ -215,16 +216,14 @@ class StrokeSettingsEditor(QtWidgets.QGroupBox):
         self._blending_mode_labels = dict(choices.blending_modes)
         self._choice_field("blending_mode").set_choices(tuple(choices.blending_modes))
 
-    def show_settings(self, selected: Sequence[StrokeSettings]) -> None:
-        self.setTitle(f"Editing strokes: {len(selected)}" if selected else "Select strokes to edit")
-        effective_states = [stroke.effective for stroke in selected]
-        overridden = set().union(*(stroke.override.overridden_settings for stroke in selected))
+    def show_settings(self, selected: Iterable[StrokeSettings]) -> None:
+        summary = SelectionSummary.from_strokes(selected)
+        self.setTitle(
+            f"Editing strokes: {summary.count}" if summary.count else "Select strokes to edit"
+        )
         for setting, (_label, field) in self._fields.items():
-            values = {
-                _editable_value(setting, getattr(state, setting)) for state in effective_states
-            }
-            field.show_value(values.pop() if len(values) == 1 else None)
-            self._reset_buttons[setting].setEnabled(setting in overridden)
+            field.show_value(summary.common.get(setting))
+            self._reset_buttons[setting].setEnabled(setting in summary.overridden)
 
     def _choice_field(self, setting: str) -> ChoiceField:
         return self._fields[setting][1]
@@ -243,11 +242,6 @@ def _number_field(
 ) -> NumberField:
     decimals = MEANINGFUL_DECIMALS[setting]
     return NumberField(minimum, maximum, suffix=suffix, decimals=decimals, scale=scale)
-
-
-def _editable_value(setting: str, value: object) -> object:
-    decimals = MEANINGFUL_DECIMALS.get(setting)
-    return value if decimals is None else round(value, decimals)
 
 
 def _resource_name(resource: ResourceRef) -> str:

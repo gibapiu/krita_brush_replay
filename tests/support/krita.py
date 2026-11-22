@@ -220,6 +220,9 @@ class Document:
         self.busy = False
         self.completion_checked = False
 
+    def fileName(self):
+        return ""
+
     def rootNode(self):
         return self.root
 

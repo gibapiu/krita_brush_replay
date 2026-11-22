@@ -29,7 +29,7 @@ Recordings store raw pressure; input calibration is not saved with strokes.</p>
 <p>
   <ul>
     <li>Record only one layer. Switching layers or documents will stop current recording and requre a new one</li>
-    <li>Keep recording in memory. A new recording replaces the current one. No history support atm</li>
+    <li>Recordings use one temporary file and are discarded when the plugin closes. A new recording replaces the current one. No recording history yet.</li>
     <li>Only settings exposed reliably by Krita's scripting API are captured. Unsaved preset-engine tweaks, such as spacing and dynamics curves, and eraser mode are not recorded.</li>
     <li>Replay restores the captured pre-replay settings and the settings of every preset it used, but unsaved preset tweaks may not survive the preset being re-selected.</li>
     <li>Replay promises identical settings, not identical pixels. Random brush engines and event timing can still vary.</li>
