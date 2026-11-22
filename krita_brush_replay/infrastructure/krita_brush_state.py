@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from math import isclose
 
 from krita_brush_replay.domain.brush_override import BrushChoices
@@ -96,7 +97,7 @@ class KritaBrushStateAdapter:
         states: Sequence[BrushState],
     ) -> PreparedBrushSettings:
         saved_state = self.capture(view)
-        resources = self._resolve_resources((saved_state, *states))
+        resources = self._resolve_resources(chain((saved_state,), states))
 
         def apply(state: BrushState) -> None:
             self._apply(view, state, resources)
@@ -107,7 +108,8 @@ class KritaBrushStateAdapter:
                     + ", ".join(mismatches)
                 )
 
-        preset_baselines = self._preset_baselines(view, states, saved_state, resources)
+        presets = (reference for reference in resources if reference.resource_type == "preset")
+        preset_baselines = self._preset_baselines(view, presets, saved_state, resources)
 
         def restore() -> None:
             failures: list[tuple[str, Exception]] = []
@@ -125,13 +127,11 @@ class KritaBrushStateAdapter:
     def _preset_baselines(
         self,
         view,
-        states: Sequence[BrushState],
+        presets: Iterable[ResourceRef],
         saved_state: BrushState,
         resources: dict[ResourceRef, object],
     ) -> tuple[BrushState, ...]:
-        other_presets = dict.fromkeys(
-            state.preset for state in states if state.preset != saved_state.preset
-        )
+        other_presets = tuple(preset for preset in presets if preset != saved_state.preset)
         if not other_presets:
             return ()
         try:

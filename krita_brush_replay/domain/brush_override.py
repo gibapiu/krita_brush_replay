@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, fields, replace
 
 from krita_brush_replay.domain.recording import BrushState, ColorState, ResourceRef
@@ -71,3 +71,38 @@ def _same_value(setting: str, recorded: object, value: object) -> bool:
     if decimals is None:
         return recorded == value
     return round(recorded, decimals) == round(value, decimals)
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionSummary:
+    count: int
+    common: Mapping[str, object]
+    overridden: frozenset[str]
+
+    @classmethod
+    def from_strokes(cls, strokes: Iterable[StrokeSettings]) -> SelectionSummary:
+        names = tuple(setting.name for setting in fields(BrushStatePatch))
+        common: dict[str, object] = {}
+        overridden: set[str] = set()
+        count = 0
+        seen: dict[int, StrokeSettings] = {}
+        for stroke in strokes:
+            count += 1
+            identity = id(stroke)
+            if identity in seen:
+                continue
+            if len(seen) == 64:
+                seen.clear()
+            seen[identity] = stroke
+            for name in names:
+                if count > 1 and common[name] is None:
+                    continue
+                value = getattr(stroke.effective, name)
+                if name in MEANINGFUL_DECIMALS:
+                    value = round(value, MEANINGFUL_DECIMALS[name])
+                if count == 1:
+                    common[name] = value
+                elif common[name] != value:
+                    common[name] = None
+            overridden.update(stroke.override.overridden_settings)
+        return cls(count, common, frozenset(overridden))

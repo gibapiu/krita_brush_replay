@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from random import Random
+from threading import Event
+from time import monotonic
+
 from krita_brush_replay.app.service import BrushReplayService
 from krita_brush_replay.domain.recording import (
     BrushSample,
@@ -47,3 +51,38 @@ class ReplayHost:
 def draw(service: BrushReplayService, x: float) -> None:
     service.accept_input(InputPhase.PRESS, BrushSample(x, 4.0, 0.5, 10))
     service.accept_input(InputPhase.RELEASE, None)
+
+
+def varied_samples(count: int, *, seed: int = 1):
+    random = Random(seed)
+    for index in range(count):
+        yield BrushSample(
+            random.random(),
+            random.random(),
+            random.random(),
+            index * 8,
+            random.random(),
+            random.random(),
+            random.random(),
+            random.random(),
+            random.random(),
+        )
+
+
+def draw_samples(service: BrushReplayService, samples) -> None:
+    points = iter(samples)
+    service.accept_input(InputPhase.PRESS, next(points))
+    for point in points:
+        service.accept_input(InputPhase.MOVE, point)
+    service.accept_input(InputPhase.RELEASE, None)
+
+
+def record_when_available(service: BrushReplayService) -> None:
+    deadline = monotonic() + 2
+    pause = Event()
+    while True:
+        service.start_recording()
+        if service.state.can_stop:
+            return
+        assert monotonic() < deadline, service.state.message
+        pause.wait(0.01)

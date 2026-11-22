@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from krita_brush_replay.domain.brush_override import BrushChoices
 from krita_brush_replay.domain.recording import (
     BrushState,
     ContextRef,
     RecordingSession,
+    Stroke,
 )
 from krita_brush_replay.infrastructure.krita_brush_state import KritaBrushStateAdapter
 from krita_brush_replay.infrastructure.krita_pressure import KritaPressureAdapter
@@ -195,9 +196,7 @@ class KritaHost:
         try:
             brush_settings = self._brush_settings.prepare_replay(
                 view,
-                tuple(stroke.brush_state for stroke in session.strokes)
-                if use_original_settings
-                else (),
+                _BrushStates(session.strokes) if use_original_settings else (),
             )
         except Exception as error:
             on_error(error)
@@ -303,3 +302,16 @@ def _widget_to_image_transform(view):
     if not invertible:
         raise RuntimeError("the canvas transform is not invertible")
     return widget_to_flake * image_transform
+
+
+class _BrushStates(Sequence[BrushState]):
+    def __init__(self, strokes: Sequence[Stroke]) -> None:
+        self._strokes = strokes
+
+    def __len__(self) -> int:
+        return len(self._strokes)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return tuple(stroke.brush_state for stroke in self._strokes[index])
+        return self._strokes[index].brush_state

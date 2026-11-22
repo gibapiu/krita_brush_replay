@@ -6,6 +6,7 @@ from krita_brush_replay.app.service import BrushReplayService, ServiceMode, Serv
 from krita_brush_replay.infrastructure.input_filter import CanvasInputFilter
 from krita_brush_replay.infrastructure.krita_host import KritaHost
 from krita_brush_replay.infrastructure.qt_facade import QtWidgets
+from krita_brush_replay.infrastructure.recording_file import RecordingFile
 
 
 class BrushReplayRuntime:
@@ -19,7 +20,7 @@ class BrushReplayRuntime:
     ) -> None:
         self._panel = panel
         self._host = host_factory(krita_instance)
-        self._service = BrushReplayService(self._host)
+        self._service = BrushReplayService(self._host, store=RecordingFile())
         self._application = QtWidgets.QApplication.instance()
         self._input_filter = input_filter_factory(
             self._host,
@@ -48,7 +49,7 @@ class BrushReplayRuntime:
     def _apply_state(self, state: ServiceState) -> None:
         if self._closed:
             return
-        self._panel.apply_state(state)
+        self._panel.apply_state(state, self._service.stroke_settings())
         self._set_capturing(state.mode is ServiceMode.RECORDING)
         recording_finished = self._mode is ServiceMode.RECORDING and state.can_replay
         self._mode = state.mode
@@ -87,3 +88,4 @@ class BrushReplayRuntime:
         self._host.invalidate_canvas_target()
         self._service.unsubscribe(self._apply_state)
         self._set_capturing(False)
+        self._service.close()

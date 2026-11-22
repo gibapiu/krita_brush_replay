@@ -2,26 +2,28 @@
 
 from time import perf_counter
 
-from krita_brush_replay.app.service import BrushReplayService
 from tests.support.recording import ReplayHost, draw
 
 
-def test_bulk_edit_and_reset_retains_the_result_within_interaction_budget():
+def test_bulk_edit_and_reset_retains_the_result_within_interaction_budget(service_factory):
     """Bulk edit and reset retains the result within interaction budget."""
 
-    service = BrushReplayService(ReplayHost())
+    host = ReplayHost()
+    service = service_factory(host)
     service.start_recording()
-    for index in range(2000):
+    for index in range(32_000):
         draw(service, index)
     service.stop_recording()
-    indexes = range(2000)
+    indexes = range(32_000)
     started = perf_counter()
-    for size in range(1, 11):
+    for size in (20, 30, 40):
         service.override_setting(indexes, "size", float(size))
-    edited = service.state
-    service.reset_setting(indexes, "size")
     elapsed = perf_counter() - started
-
+    service.replay()
+    assert all(stroke.brush_state.size == 40 for stroke in host.outputs[-1].strokes)
+    started = perf_counter()
+    service.reset_setting(indexes, "size")
+    elapsed += perf_counter() - started
+    service.replay()
     assert elapsed < 1.0
-    assert all(stroke.effective.size == 10.0 for stroke in edited.strokes)
-    assert all(stroke.effective.size == 12.345 for stroke in service.state.strokes)
+    assert all(stroke.brush_state.size == 12.345 for stroke in host.outputs[-1].strokes)

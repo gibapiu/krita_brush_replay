@@ -3,7 +3,6 @@
 import pytest
 
 from krita_brush_replay.domain.recording import BrushSample
-from tests.support.recording import RECORDED
 
 
 @pytest.mark.qt
@@ -359,7 +358,7 @@ def test_replay_timeout_reports_failure_restores_settings_and_allows_retry(workb
     saved = bench.krita.view.snapshot()
     bench.click("Replay")
     wait_until(lambda: bench.krita.document.completion_checked)
-    clock[0] = 121.0
+    clock[0] = 24 * 60 * 60
     wait_until(lambda: bench.button("Record new session").isEnabled())
     assert bench.message_contains("did not finish")
     assert bench.krita.view.snapshot() == saved
@@ -369,12 +368,11 @@ def test_replay_timeout_reports_failure_restores_settings_and_allows_retry(workb
 
 
 @pytest.mark.qt
-def test_a_long_compacted_stroke_replays_without_dropping_samples_or_accumulating_delay(
+def test_a_long_stroke_replays_without_dropping_samples_or_accumulating_delay(
     workbench, monkeypatch
 ):
     """A long gesture retains every point and its duration despite slower delivery callbacks."""
 
-    from krita_brush_replay.domain.recording import Stroke
     from krita_brush_replay.infrastructure import synthetic_input
     from krita_brush_replay.infrastructure.krita_host import KritaHost
     from tests.support.replay_clock import DelayedDelivery, VirtualClock
@@ -392,11 +390,10 @@ def test_a_long_compacted_stroke_replays_without_dropping_samples_or_accumulatin
         BrushSample(30 + index / 13, 40 + index / 17, 0.5, 1000 + index * 10)
         for index in range(1003)
     )
-    stroke = Stroke(samples, RECORDED)
     completed, errors = [], []
     replayer.replay_stroke(
         replayer.prepare(),
-        stroke.samples,
+        samples,
         lambda: None,
         lambda: completed.append(krita.canvas.received[-1]),
         errors.append,
@@ -411,5 +408,7 @@ def test_a_long_compacted_stroke_replays_without_dropping_samples_or_accumulatin
     )
     first_move_time = delivery.stroke_move_times[0]
     assert [when - first_move_time for when in delivery.stroke_move_times] == pytest.approx(
-        list(range(0, 10_020, 10)), rel=0, abs=1
+        [sample.timestamp_ms - samples[1].timestamp_ms for sample in samples[1:]],
+        rel=0,
+        abs=1,
     )

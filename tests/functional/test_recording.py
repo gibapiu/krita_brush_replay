@@ -4,16 +4,23 @@ from dataclasses import replace
 
 import pytest
 
-from krita_brush_replay.app.service import BrushReplayService, ServiceMode
+from krita_brush_replay.app.service import ServiceMode
 from krita_brush_replay.domain.recording import BrushSample, ContextRef, InputPhase
-from tests.support.recording import RECORDED, ReplayHost, draw
+from tests.support.recording import (
+    RECORDED,
+    ReplayHost,
+    draw,
+    draw_samples,
+    record_when_available,
+    varied_samples,
+)
 
 
-def test_stop_retains_the_captured_portion_and_later_input_is_ignored() -> None:
+def test_stop_retains_the_captured_portion_and_later_input_is_ignored(service_factory) -> None:
     """Stop retains the captured portion and later input is ignored."""
 
     host = ReplayHost()
-    service = BrushReplayService(host)
+    service = service_factory(host)
     points = (BrushSample(1.25, 2.5, 0.2, 100), BrushSample(3.75, 4.5, 0.7, 125))
     service.start_recording()
     service.accept_input(InputPhase.PRESS, points[0])
@@ -40,11 +47,13 @@ def test_stop_retains_the_captured_portion_and_later_input_is_ignored() -> None:
     ],
     ids=("retained-order", "pre-recording-undo", "matching-redos", "new-branch", "empty-history"),
 )
-def test_replay_contains_exactly_the_strokes_retained_after_history(actions, expected) -> None:
+def test_replay_contains_exactly_the_strokes_retained_after_history(
+    actions, expected, service_factory
+) -> None:
     """Replay contains exactly the strokes retained after history."""
 
     host = ReplayHost()
-    service = BrushReplayService(host)
+    service = service_factory(host)
     service.start_recording()
     for action in actions:
         if action == "undo":
@@ -67,55 +76,31 @@ def test_replay_contains_exactly_the_strokes_retained_after_history(actions, exp
         assert not service.state.can_replay
 
 
-def test_new_recording_replaces_the_session_and_its_edits() -> None:
-    """New recording replaces the session and its edits."""
+def test_only_a_valid_new_recording_replaces_the_session_and_edits(service_factory):
+    """An invalid Record keeps the session and edits; a valid one replaces them."""
 
     host = ReplayHost()
-    service = BrushReplayService(host)
+    service = service_factory(host)
     service.start_recording()
     draw(service, 1)
     service.stop_recording()
     service.override_setting((0,), "size", 40.0)
+
+    host.context = None
+    service.start_recording()
+    host.context = ContextRef("document", "recorded-layer")
+    service.replay()
+    assert host.outputs[0].strokes[0].samples[0].x == 1
+    assert host.outputs[0].strokes[0].brush_state.size == 40
 
     host.brush = replace(RECORDED, size=7.0)
     service.start_recording()
     draw(service, 2)
     service.stop_recording()
     service.replay()
-
-    assert len(host.outputs[0].strokes) == 1
-    assert host.outputs[0].strokes[0].samples[0].x == 2
-    assert host.outputs[0].strokes[0].brush_state.size == 7.0
-
-
-@pytest.mark.parametrize("trigger", ["release", "canvas-change", "capture-failure"])
-def test_interruption_discards_only_unfinished_input_and_allows_a_new_recording(trigger) -> None:
-    """Interruption discards only unfinished input and allows a new recording."""
-
-    host = ReplayHost()
-    service = BrushReplayService(host)
-    service.start_recording()
-    draw(service, 1)
-    service.accept_input(InputPhase.PRESS, BrushSample(2, 4, 0.5, 20))
-    if trigger == "capture-failure":
-        service.capture_failed(RuntimeError("tablet disconnected"))
-        assert "tablet disconnected" in service.state.message
-    else:
-        host.context = ContextRef("document", "another-layer")
-        if trigger == "release":
-            service.accept_input(InputPhase.RELEASE, None)
-        else:
-            service.canvas_changed()
-        assert "changed" in service.state.message
-
-    assert service.state.mode is ServiceMode.IDLE
-    service.replay()
-    assert [stroke.samples[0].x for stroke in host.outputs[0].strokes] == [1]
-    service.start_recording()
-    draw(service, 3)
-    service.stop_recording()
-    service.replay()
-    assert [stroke.samples[0].x for stroke in host.outputs[-1].strokes] == [3]
+    assert len(host.outputs[-1].strokes) == 1
+    assert host.outputs[-1].strokes[0].samples[0].x == 2
+    assert host.outputs[-1].strokes[0].brush_state.size == 7.0
 
 
 @pytest.mark.qt
@@ -185,17 +170,23 @@ def test_resize_and_outside_input_are_excluded_without_losing_the_next_stroke(wo
 
 
 @pytest.mark.qt
-def test_recording_requires_an_open_document_and_writable_layer(workbench):
-    """Recording requires an open document and writable layer."""
+@pytest.mark.parametrize("unavailable", ["document", "paint-layer"])
+def test_recording_requires_a_writable_canvas_and_accepts_unsaved_documents(workbench, unavailable):
+    """Record rejects unavailable canvases and accepts an unsaved writable one."""
 
     bench = workbench
     document = bench.krita.document
-    bench.krita.document = None
+    if unavailable == "document":
+        bench.krita.document = None
+    else:
+        document.layer.writable = False
     bench.click("Record new session")
-    assert bench.message_contains("open a document")
+    assert bench.message_contains("open a document" if unavailable == "document" else "writable")
     assert not bench.button("Replay").isEnabled()
     assert not bench.button("Stop").isEnabled()
     bench.krita.document = document
+    document.layer.writable = True
+    assert document.fileName() == ""
     bench.record()
     bench.replay()
     assert bench.message_contains("complete")
@@ -235,3 +226,145 @@ def test_stopping_a_tablet_gesture_does_not_leave_mouse_capture_locked_on_restar
     assert [
         [point.pressure for point in points] for _, points in bench.krita.document.layer.writes
     ] == [[1, 1]]
+
+
+@pytest.mark.qt
+@pytest.mark.parametrize(
+    "interruption", ["release", "canvas-change", "capture-failure", "undo", "resize"]
+)
+def test_interrupting_a_long_stroke_preserves_completed_input_and_allows_restart(
+    interruption, workbench
+):
+    """Interruptions discard the active stroke while keeping completed input."""
+
+    from tests.support.krita import Layer, mouse
+
+    bench = workbench
+    bench.click("Record new session")
+    bench.stroke(30)
+    mouse(bench.krita.canvas, "ButtonPress", x=90)
+    for index in range(1000):
+        mouse(bench.krita.canvas, "Move", x=120 + index / 13)
+
+    if interruption == "capture-failure":
+        bench.krita.capture_error = "tablet disconnected"
+        mouse(bench.krita.canvas, "ButtonRelease", x=120)
+        assert bench.message_contains("tablet disconnected")
+        bench.krita.capture_error = None
+    elif interruption == "undo":
+        bench.krita.action("edit_undo").trigger()
+    elif interruption == "resize":
+        bench.krita.view.setBrushSize(40)
+        mouse(bench.krita.canvas, "ButtonRelease", x=120)
+    else:
+        bench.krita.document.layer = Layer(bench.krita, "another-layer")
+        if interruption == "release":
+            mouse(bench.krita.canvas, "ButtonRelease", x=120)
+        else:
+            bench.runtime.canvas_changed()
+        assert bench.message_contains("changed")
+    if bench.button("Stop").isEnabled():
+        bench.click("Stop")
+    bench.replay()
+    assert len(bench.krita.document.layer.writes) == 1
+    assert bench.krita.document.layer.writes[0][1][0].position.x() == 30
+    bench.record()
+    bench.replay()
+    assert len(bench.krita.document.layer.writes) == 2
+
+
+def test_brush_changes_and_bulk_edits_preserve_each_recorded_setting(service_factory):
+    """Many brush changes retain their recorded settings through bulk edits and reset."""
+
+    host = ReplayHost()
+    service = service_factory(host)
+    brushes = [replace(RECORDED, size=float(index % 96 + 1)) for index in range(288)]
+    service.start_recording()
+    for index, brush in enumerate(brushes):
+        host.brush = brush
+        draw(service, index)
+    service.stop_recording()
+    service.override_setting(range(0, len(brushes), 2), "opacity", 0.25)
+    service.replay()
+    strokes = host.outputs[-1].strokes
+    assert [stroke.brush_state for stroke in strokes] == [
+        replace(brush, opacity=0.25) if index % 2 == 0 else brush
+        for index, brush in enumerate(brushes)
+    ]
+    assert [stroke.samples[0].x for stroke in strokes] == list(range(len(brushes)))
+    service.reset_setting(range(len(brushes)), "opacity")
+    service.replay()
+    assert [stroke.brush_state for stroke in host.outputs[-1].strokes] == brushes
+
+
+@pytest.mark.parametrize("failure", ["disk-full", "timeout"])
+def test_storage_failure_keeps_complete_written_strokes_and_their_edits(
+    failure, service_factory, recording_io
+):
+    """A failed write keeps the recorded prefix, excludes undone input and allows retry."""
+
+    from time import monotonic
+
+    host = ReplayHost()
+    service = service_factory(host)
+    recording_io.remaining = 180_000
+    recording_io.stall_when_full = failure == "timeout"
+    expected = []
+    service.start_recording()
+    draw(service, -1)
+    service.undo_triggered()
+    for stroke_index in range(20):
+        points = tuple(varied_samples(500, seed=stroke_index))
+        draw_samples(service, points)
+        expected.append(points)
+    started = monotonic()
+    service.stop_recording()
+    assert monotonic() - started < 3
+    kept = service.state.stroke_count
+    assert 0 < kept < len(expected)
+    assert f"Kept {kept}" in service.state.message
+    if failure == "disk-full":
+        assert "not enough disk space" in service.state.message
+        assert "Free some space" in service.state.message
+    else:
+        assert "storage is not responding" in service.state.message
+        service.start_recording()
+        assert "Try again shortly" in service.state.message
+        assert service.state.stroke_count == kept
+    assert service.state.sample_count == sum(len(points) for points in expected[:kept])
+    service.override_setting(range(kept), "size", 40.0)
+    service.replay()
+    assert [tuple(stroke.samples) for stroke in host.outputs[-1].strokes] == expected[:kept]
+    assert all(stroke.brush_state.size == 40 for stroke in host.outputs[-1].strokes)
+    recording_io.release.set()
+    recording_io.remaining = None
+    record_when_available(service)
+    draw(service, 99)
+    service.stop_recording()
+    service.replay()
+    assert [stroke.samples[0].x for stroke in host.outputs[-1].strokes] == [99]
+
+
+def test_stalled_storage_stops_capture_without_waiting_for_disk(service_factory, recording_io):
+    """Capture reports backpressure without waiting for a blocked write."""
+
+    from time import monotonic
+
+    host = ReplayHost()
+    service = service_factory(host)
+    service.start_recording()
+    recording_io.blocked.set()
+    started = monotonic()
+    try:
+        service.accept_input(InputPhase.PRESS, BrushSample(0, 4, 0.5, 0))
+        for point in varied_samples(100_000):
+            service.accept_input(InputPhase.MOVE, point)
+            if service.state.mode is ServiceMode.IDLE:
+                break
+        assert recording_io.entered.is_set()
+        assert service.state.mode is ServiceMode.IDLE
+        assert "cannot keep up" in service.state.message
+        assert not service.state.can_replay
+        assert monotonic() - started < 5
+    finally:
+        recording_io.release.set()
