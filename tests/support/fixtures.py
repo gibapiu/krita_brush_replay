@@ -52,7 +52,7 @@ def service_factory():
 
 @pytest.fixture
 def recording_io(monkeypatch):
-    """Inject file failures at the OS-facing write boundary."""
+    """Inject file failures at the OS-facing file boundary."""
 
     from errno import ENOSPC
     from threading import Event
@@ -64,6 +64,7 @@ def recording_io(monkeypatch):
     controls = SimpleNamespace(
         error=None,
         reader_open_error=None,
+        read_error=None,
         delay=0.0,
         remaining=None,
         stall_when_full=False,
@@ -117,10 +118,22 @@ def recording_io(monkeypatch):
 
     monkeypatch.setattr(recording_writer, "open", open_output, raising=False)
 
+    class Input:
+        def __init__(self, stream):
+            self._stream = stream
+
+        def read(self, *args):
+            if controls.read_error is not None:
+                raise OSError(controls.read_error)
+            return self._stream.read(*args)
+
+        def __getattr__(self, name):
+            return getattr(self._stream, name)
+
     def open_input(path, mode="r", *args, **kwargs):
         if controls.reader_open_error is not None:
             raise OSError(controls.reader_open_error)
-        return open_file(path, mode, *args, **kwargs)
+        return Input(open_file(path, mode, *args, **kwargs))
 
     monkeypatch.setattr(recording_reader, "open", open_input, raising=False)
     yield controls

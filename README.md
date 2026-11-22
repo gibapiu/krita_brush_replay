@@ -54,9 +54,9 @@ zip -r krita_brush_replay_plugin.zip krita_brush_replay.desktop krita_brush_repl
 1. Select a writable paint layer and the freehand brush tool.
 2. Press **Record new session** and draw one or more strokes.
 3. Press **Stop**.
-4. Optionally select strokes in the list (or **Select all strokes**) and change their settings.
-   Settings that differ between selected strokes show —. Press ↺ next to a setting to return the selected strokes
-   to their recorded value. Changed strokes are marked with ✎.
+4. Optionally change settings. Changes apply to all strokes.
+   Settings that differ between strokes show —. Press ↺ next to a setting to return all strokes
+   to their recorded value.
 5. Select the paint layer where the replay should be drawn.
 6. Press **Replay** to paint with each stroke's settings, or choose
    new settings in Krita and press **Compare with current settings**.

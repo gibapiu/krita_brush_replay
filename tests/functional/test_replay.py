@@ -68,7 +68,6 @@ def test_comparison_ignores_edits_and_keeps_current_settings(workbench):
 
     bench = workbench
     bench.record()
-    bench.click("Select all strokes")
     bench.number("Size", 40)
     bench.krita.view.setCurrentBrushPreset(bench.krita.pencil)
     bench.krita.view.setBrushSize(75)
@@ -130,7 +129,6 @@ def test_partial_replay_failure_restores_active_and_touched_presets_and_can_retr
     krita.view.setCurrentBrushPreset(krita.pencil)
     bench.stroke(90)
     bench.click("Stop")
-    bench.click("Select all strokes")
     bench.number("Size", 40)
     krita.view.setCurrentBrushPreset(krita.fixed)
     saved = krita.view.snapshot()
@@ -257,7 +255,6 @@ def test_fallback_delivers_drag_and_tap_with_raw_axes_and_correct_settings(workb
     tablet(krita.canvas, "Press", x=90, pressure=0.5, timestamp=130)
     tablet(krita.canvas, "Release", x=90, timestamp=140)
     bench.click("Stop")
-    bench.click("Select all strokes")
     bench.number("Size", 40)
     krita.view.setCurrentBrushPreset(krita.pencil)
     krita.view.setBrushSize(75)

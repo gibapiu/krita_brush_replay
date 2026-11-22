@@ -25,12 +25,11 @@ def test_recording_growth_keeps_the_panel_within_its_update_budget(qapp, workben
 
 
 @pytest.mark.qt
-def test_bulk_edit_and_status_updates_keep_the_panel_responsive(workbench, monkeypatch):
-    """Editing a large selection uses little temporary memory and survives status updates."""
+def test_editing_all_strokes_and_status_updates_keep_the_panel_responsive(workbench, monkeypatch):
+    """Editing a large recording uses little temporary memory and survives status updates."""
 
     bench = workbench
     bench.record(32_000)
-    bench.click("Select all strokes")
     tracemalloc.start()
     try:
         bench.number("Size", 40)

@@ -63,22 +63,6 @@ class Workbench:
             QtTest.QTest.keyClick(field, qt_enum(QtCore.Qt, "Key", "Key_Down"))
         raise AssertionError(f"Choice {text} was not selectable in {title}")
 
-    def select(self, *rows):
-        listing = self.panel.findChild(QtWidgets.QAbstractItemView)
-        listing.clearSelection()
-        for row in rows:
-            QtTest.QTest.mouseClick(
-                listing.viewport(),
-                qt_enum(QtCore.Qt, "MouseButton", "LeftButton"),
-                qt_enum(QtCore.Qt, "KeyboardModifier", "ControlModifier"),
-                listing.visualRect(listing.model().index(row)).center(),
-            )
-
-    def stroke_labels(self):
-        listing = self.panel.findChild(QtWidgets.QAbstractItemView)
-        model = listing.model()
-        return tuple(model.index(row, 0).data() for row in range(model.rowCount()))
-
     def stroke(self, x=30):
         mouse(self.krita.canvas, "ButtonPress", x, timestamp=100)
         mouse(self.krita.canvas, "Move", x + 30, timestamp=110)

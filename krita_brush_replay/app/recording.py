@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from array import array
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
-from functools import lru_cache
 from typing import TypeVar
 
 from krita_brush_replay.app.recording_store import RecordingStore, StorageBusyError
-from krita_brush_replay.domain.brush_override import BrushStatePatch, StrokeSettings
+from krita_brush_replay.domain.brush_override import BrushStatePatch, RecordingSettings
 from krita_brush_replay.domain.recording import BrushSample, BrushState, Stroke
 from krita_brush_replay.domain.recording_history import HistoryStep, RecordingHistory
 
@@ -39,12 +38,10 @@ class Recording:
         self._stroke_ends = array("Q")
         self._brush_references = array("Q")
         self._sample_totals = array("Q")
-        self._overrides: list[BrushStatePatch | None] | None = None
-        self._resolve = lru_cache(maxsize=64)(StrokeSettings)
+        self._override = _EMPTY_PATCH
         self._generation = 0
         self._closed = False
         self.revision = 0
-        self.settings = self._view(self._settings_at)
 
     def _view(self, read: Callable[[int], T]) -> Sequence[T]:
         generation = self._generation
@@ -55,6 +52,10 @@ class Recording:
             return self._history.stroke_count
 
         return _LiveRows(count, read)
+
+    @property
+    def stroke_count(self) -> int:
+        return self._history.stroke_count
 
     @property
     def sample_count(self) -> int:
@@ -73,9 +74,7 @@ class Recording:
         self._stroke_ends = array("Q")
         self._brush_references = array("Q")
         self._sample_totals = array("Q")
-        self._overrides = None
-        self._resolve.cache_clear()
-        self.settings = self._view(self._settings_at)
+        self._override = _EMPTY_PATCH
         self.revision += 1
 
     def begin(self, brush: BrushState) -> None:
@@ -135,41 +134,25 @@ class Recording:
         del self._brush_references[count:]
         del self._sample_totals[count:]
 
-    def _patch_at(self, row: int) -> BrushStatePatch:
-        return (self._overrides[row] if self._overrides is not None else None) or _EMPTY_PATCH
-
-    def _settings_at(self, row: int) -> StrokeSettings:
-        brush = self._storage.read_brush(self._brush_references[row])
-        return self._resolve(brush, self._patch_at(row))
+    def settings(self) -> RecordingSettings:
+        count = self._history.stroke_count
+        references = dict.fromkeys(self._brush_references[:count])
+        brushes = (self._storage.read_brush(reference) for reference in references)
+        return RecordingSettings.summarize(count, brushes, self._override)
 
     def strokes(self, *, effective: bool = False) -> Sequence[Stroke]:
+        patch = self._override if effective else _EMPTY_PATCH
+
         def read(row: int) -> Stroke:
             stroke = self._storage.read_stroke(self._stroke_ends[row])
-            patch = self._patch_at(row)
-            if effective and patch.overridden_settings:
+            if patch.overridden_settings:
                 return replace(stroke, brush_state=patch.apply_to(stroke.brush_state))
             return stroke
 
         return self._view(read)
 
-    def edit(
-        self, indexes: Iterable[int], change: Callable[[StrokeSettings], StrokeSettings]
-    ) -> None:
-        edited = (
-            list(self._overrides) if self._overrides is not None else [None] * len(self.settings)
-        )
-
-        @lru_cache(maxsize=64)
-        def changed(brush: BrushState, patch: BrushStatePatch) -> BrushStatePatch | None:
-            result = change(self._resolve(brush, patch)).override
-            return result if result.overridden_settings else None
-
-        for row in indexes:
-            if row not in range(len(self.settings)):
-                raise IndexError(f"stroke {row + 1} does not exist")
-            brush = self._storage.read_brush(self._brush_references[row])
-            edited[row] = changed(brush, self._patch_at(row))
-        self._overrides = edited if any(edited) else None
+    def edit(self, change: Callable[[RecordingSettings], BrushStatePatch]) -> None:
+        self._override = change(self.settings())
         self.revision += 1
 
     def close(self) -> None:
@@ -182,5 +165,4 @@ class Recording:
             self._stroke_ends = array("Q")
             self._brush_references = array("Q")
             self._sample_totals = array("Q")
-            self._overrides = None
-            self._resolve.cache_clear()
+            self._override = _EMPTY_PATCH
