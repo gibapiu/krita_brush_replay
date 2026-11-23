@@ -55,30 +55,19 @@ class KritaHost:
         return document, node, ContextRef(document_id, layer_id)
 
     def is_canvas_target(self, target) -> bool:
-        window = _call(self._krita, "activeWindow")
-        qwindow = _call(window, "qwindow")
-        target_window = _call(target, "window")
-        if qwindow is None or target_window != qwindow:
+        if not (target.inherits("KisOpenGLCanvas2") or target.inherits("KisQPainterCanvas")):
             return False
-        current = target
-        while current is not None and current != qwindow:
-            class_name = _qt_class_name(current).lower()
-            object_name = _string_call(current, "objectName").lower()
-            if "canvas" in class_name or "openglwidget" in class_name or object_name == "canvas":
-                self._canvas_target = target
-                return True
-            current = _call(current, "parentWidget")
-        return False
+        window = _call(self._krita, "activeWindow")
+        return target.window() == _call(window, "qwindow") and not _popup_open(target)
 
-    def capture_mapper(
-        self,
-    ) -> Callable[[tuple[float, float]], tuple[float, float]]:
-        """Return one stable widget-to-image mapper for a captured stroke."""
+    def capture_mapper(self, target) -> Callable[[tuple[float, float]], tuple[float, float]]:
+        """Adopt the canvas as replay target and map its widget points to the image."""
 
         view = self._active_view()
         if view is None:
             raise RuntimeError("no active Krita view")
         transform = _widget_to_image_transform(view)
+        self._canvas_target = target
 
         def to_image(position: tuple[float, float]) -> tuple[float, float]:
             image_position = transform.map(QtCore.QPointF(*position))
@@ -270,11 +259,6 @@ def _call(source, name: str):
     return value() if callable(value) else None
 
 
-def _string_call(source, name: str) -> str:
-    value = _call(source, name)
-    return "" if value is None else str(value)
-
-
 def _stable_object_id(source) -> str | None:
     unique_id = _call(source, "uniqueId")
     if unique_id is None:
@@ -283,14 +267,15 @@ def _stable_object_id(source) -> str | None:
     return value or None
 
 
-def _qt_class_name(source) -> str:
-    meta_object = _call(source, "metaObject")
-    return _string_call(meta_object, "className")
-
-
 def _bool_call(source, name: str, default: bool) -> bool:
     value = _call(source, name)
     return default if value is None else bool(value)
+
+
+def _popup_open(canvas) -> bool:
+    return any(
+        child.inherits("KisPopupPalette") and child.isVisible() for child in canvas.children()
+    )
 
 
 def _widget_to_image_transform(view):

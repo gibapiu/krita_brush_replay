@@ -193,6 +193,11 @@ class BrushReplayService:
     def _accept_input(self, phase: InputPhase, sample: BrushSample | None) -> None:
         if self._closed or self._mode is not ServiceMode.RECORDING:
             return
+        if phase is InputPhase.CANCEL:
+            if self._active:
+                self._discard_active_stroke()
+                self._notify()
+            return
         if phase in (InputPhase.PRESS, InputPhase.RELEASE):
             if self._host.active_context() != self._context:
                 self._stop_for_context_change()

@@ -104,26 +104,33 @@ def test_only_a_valid_new_recording_replaces_the_session_and_edits(service_facto
 
 
 @pytest.mark.qt
-@pytest.mark.parametrize("mouse_release_first", [True, False])
-def test_tablet_ownership_preserves_axes_without_duplicate_mouse_strokes(
-    workbench, mouse_release_first
-):
-    """Tablet ownership preserves axes without duplicate mouse strokes."""
+@pytest.mark.parametrize("echo", ["before-pen", "during-pen", "after-pen"])
+def test_a_pen_drag_records_once_with_its_axes_when_krita_drops_the_mouse_echo(workbench, echo):
+    """A pen drag records once with its axes while Krita drops the system mouse echo."""
 
-    from tests.support.krita import mouse, tablet
+    from tests.support.krita import QtCore, QtWidgets, mouse, qt_enum, tablet
 
     bench = workbench
     canvas = bench.krita.canvas
+
+    def mouse_echo():
+        mouse(canvas, "ButtonPress", krita_drops=True)
+        mouse(canvas, "Move", x=60)
+        mouse(canvas, "ButtonRelease", x=60)
+
     bench.click("Record new session")
+    if echo == "before-pen":
+        mouse_echo()
     tablet(canvas, "Press", pressure=0.2)
-    mouse(canvas, "ButtonPress")
-    mouse(canvas, "Move")
+    tablet(canvas, "Press", pressure=0.25)
+    mouse(canvas, "Move", held=False)
+    if echo == "during-pen":
+        mouse_echo()
+    QtWidgets.QApplication.sendEvent(canvas, QtCore.QEvent(qt_enum(QtCore.QEvent, "Type", "Leave")))
     tablet(canvas, "Move", x=60, pressure=0.7)
-    if mouse_release_first:
-        mouse(canvas, "ButtonRelease")
     tablet(canvas, "Release", x=60)
-    if not mouse_release_first:
-        mouse(canvas, "ButtonRelease")
+    if echo == "after-pen":
+        mouse_echo()
     bench.stroke(90)
     bench.click("Stop")
     bench.replay()
@@ -140,8 +147,8 @@ def test_tablet_ownership_preserves_axes_without_duplicate_mouse_strokes(
 
 @pytest.mark.qt
 @pytest.mark.parametrize("device", ["mouse", "tablet"])
-def test_resize_and_outside_input_are_excluded_without_losing_the_next_stroke(workbench, device):
-    """Resize and outside input are excluded without losing the next stroke."""
+def test_unpainted_and_outside_input_is_excluded_without_losing_the_next_stroke(workbench, device):
+    """Resize, popup-closing and outside input are excluded without losing the next stroke."""
 
     from tests.support.krita import mouse, tablet
 
@@ -155,6 +162,9 @@ def test_resize_and_outside_input_are_excluded_without_losing_the_next_stroke(wo
     )
     for phase in phases:
         send(bench.krita.canvas, phase, shift=True)
+    bench.krita.canvas.popup_palette.show()
+    for phase in phases:
+        send(bench.krita.canvas, phase, x=50)
     mouse(bench.panel, "ButtonPress")
     mouse(bench.panel, "Move")
     mouse(bench.panel, "ButtonRelease")
@@ -193,16 +203,25 @@ def test_recording_requires_a_writable_canvas_and_accepts_unsaved_documents(work
 
 
 @pytest.mark.qt
-def test_lost_tablet_release_does_not_block_a_later_mouse_gesture(workbench):
-    """Lost tablet release does not block a later mouse gesture."""
+@pytest.mark.parametrize("pen_up", ["hover", "out-of-range", "left-canvas"])
+def test_lost_tablet_release_does_not_block_a_later_mouse_gesture(workbench, pen_up):
+    """A pen drag whose release is lost ends once the pen hovers, leaves range or the canvas."""
 
-    from tests.support.krita import mouse, tablet
+    from tests.support.krita import QtCore, QtWidgets, mouse, qt_enum, tablet
 
     bench = workbench
+    canvas = bench.krita.canvas
     bench.click("Record new session")
-    tablet(bench.krita.canvas, "Press", pressure=0.4)
-    tablet(bench.krita.canvas, "Move", pressure=0.6)
-    mouse(bench.krita.canvas, "Move", held=False)
+    tablet(canvas, "Press", pressure=0.4)
+    tablet(canvas, "Move", pressure=0.6)
+    mouse(canvas, "Move", held=False)
+    if pen_up == "hover":
+        tablet(canvas, "Move", x=70, pressure=0, held=False)
+    elif pen_up == "out-of-range":
+        tablet(canvas, "LeaveProximity", pressure=0, held=False)
+    else:
+        leave = QtCore.QEvent(qt_enum(QtCore.QEvent, "Type", "Leave"))
+        QtWidgets.QApplication.sendEvent(canvas, leave)
     bench.stroke(90)
     bench.click("Stop")
     bench.replay()

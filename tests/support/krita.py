@@ -237,21 +237,42 @@ class Document:
         pass
 
 
-class Canvas(QtWidgets.QWidget):
+class KisOpenGLCanvas2(QtWidgets.QWidget):
+    """Expose the Qt class name reported by Krita's OpenGL drawing surface."""
+
+
+class KisPopupPalette(QtWidgets.QWidget):
+    """Expose the Qt class name of Krita's canvas popup palette."""
+
+
+class KritaCanvasFixture(KisOpenGLCanvas2):
     def __init__(self, application, parent) -> None:
         super().__init__(parent)
         self.application = application
         self.setObjectName("canvas")
         self.setAttribute(qt_enum(QtCore.Qt, "WidgetAttribute", "WA_TabletTracking"), True)
         self.setFocusPolicy(qt_enum(QtCore.Qt, "FocusPolicy", "StrongFocus"))
+        self.popup_palette = KisPopupPalette(self)
+        self.popup_palette.hide()
         self.received = []
         self.gestures = []
         self.active = None
         self.on_press = None
         self.on_move = None
 
+    def mousePressEvent(self, event):
+        event.setAccepted(not getattr(event, "krita_drops", False))
+
     def event(self, event):
         kind = event.type()
+        presses = {
+            qt_enum(QtCore.QEvent, "Type", "MouseButtonPress"),
+            qt_enum(QtCore.QEvent, "Type", "TabletPress"),
+        }
+        if kind in presses and self.popup_palette.isVisible():
+            self.popup_palette.hide()
+            event.accept()
+            return True
         if kind == qt_enum(QtCore.QEvent, "Type", "Leave"):
             self.received.append("leave")
         elif kind == qt_enum(QtCore.QEvent, "Type", "Enter"):
@@ -342,7 +363,7 @@ class Krita:
         self.view = View(self)
         self.document = Document(self)
         self.window = QtWidgets.QMainWindow()
-        self.canvas = Canvas(self, self.window)
+        self.canvas = KritaCanvasFixture(self, self.window)
         self.window.setCentralWidget(self.canvas)
         self.window.resize(500, 300)
         self.window.show()
@@ -409,7 +430,7 @@ class TimedTabletEvent(QtGui.QTabletEvent):
         return self.input_timestamp
 
 
-def mouse(canvas, phase, x=30, y=40, *, timestamp=100, shift=False, held=True):
+def mouse(canvas, phase, x=30, y=40, *, timestamp=100, shift=False, held=True, krita_drops=False):
     kind = qt_enum(QtCore.QEvent, "Type", f"Mouse{phase}")
     left = qt_enum(QtCore.Qt, "MouseButton", "LeftButton")
     none = qt_enum(QtCore.Qt, "MouseButton", "NoButton")
@@ -424,10 +445,11 @@ def mouse(canvas, phase, x=30, y=40, *, timestamp=100, shift=False, held=True):
         modifiers,
     )
     event.input_timestamp = timestamp
+    event.krita_drops = krita_drops
     QtWidgets.QApplication.sendEvent(canvas, event)
 
 
-def tablet(canvas, phase, x=30, y=40, *, pressure=0.5, timestamp=100, shift=False):
+def tablet(canvas, phase, x=30, y=40, *, pressure=0.5, timestamp=100, shift=False, held=True):
     kind = qt_enum(QtCore.QEvent, "Type", f"Tablet{phase}")
     left = qt_enum(QtCore.Qt, "MouseButton", "LeftButton")
     none = qt_enum(QtCore.Qt, "MouseButton", "NoButton")
@@ -446,7 +468,7 @@ def tablet(canvas, phase, x=30, y=40, *, pressure=0.5, timestamp=100, shift=Fals
         modifiers,
     )
     button = none if phase == "Move" else left
-    buttons = none if phase == "Release" else left
+    buttons = none if phase == "Release" or not held else left
     if hasattr(QtGui, "QPointingDevice"):
         event = TimedTabletEvent(
             kind, QtGui.QPointingDevice.primaryPointingDevice(), *values, button, buttons

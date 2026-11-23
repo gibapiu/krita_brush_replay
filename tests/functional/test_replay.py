@@ -378,7 +378,7 @@ def test_a_long_stroke_replays_without_dropping_samples_or_accumulating_delay(
     monkeypatch.setattr(synthetic_input, "monotonic", lambda: clock.now_ms / 1000)
     krita = workbench.krita
     host = KritaHost(krita)
-    assert host.is_canvas_target(krita.canvas)
+    host.capture_mapper(krita.canvas)
     delivery = DelayedDelivery(clock)
     replayer = synthetic_input.SyntheticInputReplayer(
         host.replay_input_target, clock, event_poster=delivery
