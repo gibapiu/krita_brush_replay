@@ -1,9 +1,10 @@
-"""Non-consuming Qt event filter for mouse and tablet brush gestures."""
+"""Non-consuming Qt event filter that records the canvas strokes Krita paints."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from krita_brush_replay.domain.recording import (
     BrushSample,
@@ -11,13 +12,11 @@ from krita_brush_replay.domain.recording import (
     normalized_input_speed,
 )
 from krita_brush_replay.infrastructure.input_events import (
-    event_device,
-    event_phase,
+    event_type,
     event_value,
     is_brush_resize_gesture,
+    is_left_button,
     is_left_held,
-    is_left_press,
-    is_synthesized_mouse,
 )
 from krita_brush_replay.infrastructure.qt_facade import QtCore
 
@@ -25,9 +24,43 @@ SampleHandler = Callable[[InputPhase, BrushSample | None], None]
 ErrorHandler = Callable[[Exception], None]
 logger = logging.getLogger(__name__)
 
+@dataclass(slots=True)
+class _Stroke:
+    target: object
+    pen: bool
+    to_image: Callable[[tuple[float, float]], tuple[float, float]]
+    dropped_press: tuple | None = None
+    left_canvas: bool = False
+    last_position: tuple[float, float] | None = None
+    last_timestamp_ms: int | None = None
+
+    def sample(self, event) -> BrushSample:
+        position = _event_xy(event)
+        timestamp_ms = max(0, int(event_value(event, "timestamp", 0)))
+        speed = normalized_input_speed(
+            self.last_position,
+            self.last_timestamp_ms,
+            position,
+            timestamp_ms,
+        )
+        self.last_position = position
+        self.last_timestamp_ms = timestamp_ms
+        x, y = self.to_image(position)
+        return BrushSample(
+            x=x,
+            y=y,
+            pressure=min(1.0, max(0.0, float(event.pressure()))) if self.pen else 1.0,
+            timestamp_ms=timestamp_ms,
+            x_tilt=float(event_value(event, "xTilt", 0.0)),
+            y_tilt=float(event_value(event, "yTilt", 0.0)),
+            rotation=float(event_value(event, "rotation", 0.0)),
+            tangential_pressure=float(event_value(event, "tangentialPressure", 0.0)),
+            speed=speed,
+        )
+
 
 class CanvasInputFilter(QtCore.QObject):
-    """Observe canvas events without preventing Krita from painting them."""
+    """Record the strokes Krita paints, skipping input Krita ignores."""
 
     def __init__(
         self,
@@ -40,15 +73,27 @@ class CanvasInputFilter(QtCore.QObject):
         self._host = host
         self._handler = handler
         self._error_handler = error_handler
-        self._target = None
-        self._device_kind: str | None = None
-        self._to_image = None
-        self._last_position: tuple[float, float] | None = None
-        self._last_timestamp_ms: int | None = None
+        self._handlers = {
+            event_type("TabletPress"): self._pen_press,
+            event_type("TabletMove"): self._pen_move,
+            event_type("TabletRelease"): self._pen_release,
+            event_type("TabletLeaveProximity"): self._pen_left,
+            event_type("MouseButtonPress"): self._mouse_press,
+            event_type("MouseButtonDblClick"): self._mouse_press,
+            event_type("MouseMove"): self._mouse_move,
+            event_type("MouseButtonRelease"): self._mouse_release,
+            event_type("Leave"): self._canvas_left,
+            event_type("FocusOut"): self._canvas_lost,
+            event_type("Hide"): self._canvas_lost,
+        }
+        self.reset()
 
     def eventFilter(self, watched, event) -> bool:
+        handle = self._handlers.get(event.type())
+        if handle is None:
+            return False
         try:
-            self._dispatch(watched, event)
+            handle(watched, event)
         except Exception as error:
             logger.exception("brush input capture failed")
             self.reset()
@@ -58,82 +103,96 @@ class CanvasInputFilter(QtCore.QObject):
                 logger.exception("brush input error handler failed")
         return False
 
-    def _dispatch(self, watched, event) -> None:
-        device = event_device(event)
-        if device is None or (device == "mouse" and is_synthesized_mouse(event)):
-            return
-        self._handle(event, watched, device)
-
-    def _handle(self, event, watched, device_kind: str) -> None:
-        phase = event_phase(event)
-        if phase is None:
-            return
-        if device_kind == "mouse" and self._device_kind == "tablet":
-            if phase is InputPhase.MOVE and not is_left_held(event):
-                self._release()
-            return
-        if phase is InputPhase.PRESS:
-            if (
-                not is_left_press(event)
-                or is_brush_resize_gesture(event)
-                or not self._host.is_canvas_target(watched)
-            ):
-                return
-            self._target = watched
-            self._device_kind = device_kind
-            self._to_image = self._host.capture_mapper()
-            self._last_position = None
-            self._last_timestamp_ms = None
-        elif watched is not self._target or device_kind != self._device_kind:
-            return
-
-        if phase is InputPhase.RELEASE:
-            self._release()
-            return
-
-        position = _event_xy(event)
-        timestamp_ms = max(0, int(event_value(event, "timestamp", 0)))
-        speed = normalized_input_speed(
-            self._last_position,
-            self._last_timestamp_ms,
-            position,
-            timestamp_ms,
-        )
-        if self._to_image is None:
-            raise RuntimeError("the stroke has no captured coordinate mapper")
-        x, y = self._to_image(position)
-        sample = BrushSample(
-            x=x,
-            y=y,
-            pressure=_pressure(event, device_kind),
-            timestamp_ms=timestamp_ms,
-            x_tilt=float(event_value(event, "xTilt", 0.0)),
-            y_tilt=float(event_value(event, "yTilt", 0.0)),
-            rotation=float(event_value(event, "rotation", 0.0)),
-            tangential_pressure=float(event_value(event, "tangentialPressure", 0.0)),
-            speed=speed,
-        )
-        self._last_position = position
-        self._last_timestamp_ms = timestamp_ms
-        self._handler(phase, sample)
-
-    def _release(self) -> None:
-        self._handler(InputPhase.RELEASE, None)
-        self.reset()
-
     def reset(self) -> None:
-        self._target = None
-        self._device_kind = None
-        self._to_image = None
-        self._last_position = None
-        self._last_timestamp_ms = None
+        self._stroke: _Stroke | None = None
+
+    @property
+    def _pen_down(self) -> bool:
+        return self._stroke is not None and self._stroke.pen
+
+    def _new_stroke(self, target, event, *, pen: bool) -> _Stroke | None:
+        if (
+            self._pen_down
+            or not is_left_button(event)
+            or is_brush_resize_gesture(event)
+            or not self._host.is_canvas_target(target)
+        ):
+            return None
+        return _Stroke(target, pen, self._host.capture_mapper(target))
+
+    def _begin(self, stroke: _Stroke, sample: BrushSample) -> None:
+        self._finish()
+        self._stroke = stroke
+        self._handler(InputPhase.PRESS, sample)
+
+    def _finish(self) -> None:
+        if self._stroke is not None:
+            self._stroke = None
+            self._handler(InputPhase.RELEASE, None)
+
+    def _pen_press(self, target, event) -> None:
+        stroke = self._new_stroke(target, event, pen=True)
+        if stroke is not None:
+            self._begin(stroke, stroke.sample(event))
+
+    def _pen_move(self, target, event) -> None:
+        if not self._pen_down:
+            return
+        if not is_left_held(event):
+            self._finish()
+            return
+        self._stroke.left_canvas = False
+        if target is self._stroke.target:
+            self._handler(InputPhase.MOVE, self._stroke.sample(event))
+
+    def _pen_release(self, target, event) -> None:
+        if self._pen_down and (is_left_button(event) or not is_left_held(event)):
+            self._finish()
+
+    def _pen_left(self, target, event) -> None:
+        if self._pen_down:
+            self._finish()
+
+    def _mouse_press(self, target, event) -> None:
+        stroke = self._stroke
+        if stroke is not None and stroke.dropped_press == (target, _press_identity(event)):
+            self._stroke = None
+            self._handler(InputPhase.CANCEL, None)
+            return
+        if self._pen_down and stroke.left_canvas:
+            self._finish()
+        stroke = self._new_stroke(target, event, pen=False)
+        if stroke is not None:
+            stroke.dropped_press = (target.parentWidget(), _press_identity(event))
+            self._begin(stroke, stroke.sample(event))
+
+    def _mouse_move(self, target, event) -> None:
+        stroke = self._stroke
+        if stroke is not None and not stroke.pen and target is stroke.target:
+            self._handler(InputPhase.MOVE, stroke.sample(event))
+
+    def _mouse_release(self, target, event) -> None:
+        stroke = self._stroke
+        if (
+            stroke is not None
+            and not stroke.pen
+            and (is_left_button(event) or not is_left_held(event))
+        ):
+            self._finish()
+
+    def _canvas_left(self, target, event) -> None:
+        if self._pen_down and target is self._stroke.target:
+            self._stroke.left_canvas = True
+
+    def _canvas_lost(self, target, event) -> None:
+        if self._stroke is not None and target is self._stroke.target:
+            self._finish()
 
 
-def _pressure(event, device_kind: str) -> float:
-    if device_kind == "mouse":
-        return 1.0
-    value = getattr(event, "pressure", lambda: 1.0)()
-    return min(1.0, max(0.0, float(value)))
+def _press_identity(event) -> tuple:
+    point = event_value(event, "globalPosition", None)
+    point = event.globalPos() if point is None else point.toPoint()
+    return event.type(), event.button(), point.x(), point.y()
 
 
 def _event_xy(event) -> tuple[float, float]:

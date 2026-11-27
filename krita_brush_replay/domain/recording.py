@@ -18,6 +18,7 @@ class InputPhase(Enum):
     PRESS = auto()
     MOVE = auto()
     RELEASE = auto()
+    CANCEL = auto()
 
 
 @dataclass(frozen=True, slots=True)
